@@ -1,0 +1,15 @@
+import { X as require_jsx_runtime } from "../_libs/@tanstack/react-router+[...].mjs";
+import { n as Shell } from "./shell-Dkqa3wbv.mjs";
+//#region node_modules/.nitro/vite/services/ssr/assets/support-BnCuREUQ.js
+var import_jsx_runtime = require_jsx_runtime();
+function SupportPage() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Shell, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h1", {
+		className: "text-2xl font-extrabold lg:hidden",
+		children: "پشتیبانی"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "mt-2 text-sm leading-6 text-muted",
+		children: "این صفحه را بعداً کامل می‌کنیم."
+	})] });
+}
+//#endregion
+export { SupportPage as component };

@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-BuqwL3YU.js";import{t}from"./useNavigate-DdV5sgo9.js";import{a as n}from"./index-C6nksRda.js";var r=e();function i(){let{next:e}=n.useSearch();return(0,r.jsx)(t,{to:`/auth`,search:{next:e}})}export{i as component};

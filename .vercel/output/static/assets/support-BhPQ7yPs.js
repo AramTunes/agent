@@ -1,0 +1,1 @@
+import{t as e}from"./jsx-runtime-BuqwL3YU.js";import{t}from"./shell-CGB1veWs.js";var n=e();function r(){return(0,n.jsxs)(t,{children:[(0,n.jsx)(`h1`,{className:`text-2xl font-extrabold lg:hidden`,children:`پشتیبانی`}),(0,n.jsx)(`p`,{className:`mt-2 text-sm leading-6 text-muted`,children:`این صفحه را بعداً کامل می‌کنیم.`})]})}export{r as component};
