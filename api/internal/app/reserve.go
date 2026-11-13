@@ -139,6 +139,7 @@ func (s *Service) Availability(raw map[string]any) (any, error) {
 	businessID, _ := textOf(raw, "businessId", 80, "")
 	serviceID, _ := textOf(raw, "serviceId", 80, "")
 	staffID, _ := textOf(raw, "staffId", 80, "")
+	except, _ := textOf(raw, "exceptBookingId", 80, "")
 	day, err := dayOf(raw["day"])
 	if err != nil {
 		return nil, err
@@ -159,7 +160,11 @@ func (s *Service) Availability(raw map[string]any) (any, error) {
 	if staffID != "" {
 		only = &staffID
 	}
-	rows, err := s.calendars(s.db, b, serviceID, day, only, nil)
+	var ignore *string
+	if except != "" {
+		ignore = &except
+	}
+	rows, err := s.calendars(s.db, b, serviceID, day, only, ignore)
 	if err != nil {
 		return nil, err
 	}
@@ -203,25 +208,27 @@ func (s *Service) Availability(raw map[string]any) (any, error) {
 const bookingSelect = `
 SELECT b.id, b.business_id, b.service_id, b.staff_id, b.customer_id, b.customer_user_id, b.created_by_user_id,
        b.starts_at, b.ends_at, b.status, b.source, b.note, b.cancel_reason,
-       s.name, st.name, biz.name, biz.slug, biz.timezone, biz.avatar, c.name, c.phone, c.email, s.price_toman, s.duration_minutes
+       s.name, st.name, biz.name, biz.slug, biz.timezone, biz.avatar,
+       COALESCE(NULLIF(c.name, ''), b.customer_name, ''), COALESCE(NULLIF(c.phone, ''), b.customer_phone, ''), COALESCE(c.email, ''), COALESCE(c.customer_note, ''),
+       s.price_toman, s.duration_minutes
 FROM bookings b
 JOIN services s ON s.id = b.service_id
 JOIN staff st ON st.id = b.staff_id
 JOIN businesses biz ON biz.id = b.business_id
-JOIN customers c ON c.id = b.customer_id`
+LEFT JOIN customers c ON c.id = b.customer_id`
 
 type bookRow struct {
 	ID, BusinessID, ServiceID, StaffID, CustomerID, CreatedBy, Starts, Ends, Status, Source, Note, Reason string
-	CustomerUser                                                                                           sql.NullString
-	ServiceName, StaffName, BizName, Slug, Timezone, Avatar, CustName, CustPhone, CustEmail string
-	Price, Duration                                                                                        int
+	CustomerUser                                                                                          sql.NullString
+	ServiceName, StaffName, BizName, Slug, Timezone, Avatar, CustName, CustPhone, CustEmail, CustomerNote string
+	Price, Duration                                                                                       int
 }
 
 func scanBook(row interface{ Scan(...any) error }) (bookRow, error) {
 	var b bookRow
 	err := row.Scan(&b.ID, &b.BusinessID, &b.ServiceID, &b.StaffID, &b.CustomerID, &b.CustomerUser, &b.CreatedBy,
 		&b.Starts, &b.Ends, &b.Status, &b.Source, &b.Note, &b.Reason,
-		&b.ServiceName, &b.StaffName, &b.BizName, &b.Slug, &b.Timezone, &b.Avatar, &b.CustName, &b.CustPhone, &b.CustEmail, &b.Price, &b.Duration)
+		&b.ServiceName, &b.StaffName, &b.BizName, &b.Slug, &b.Timezone, &b.Avatar, &b.CustName, &b.CustPhone, &b.CustEmail, &b.CustomerNote, &b.Price, &b.Duration)
 	return b, err
 }
 
@@ -234,7 +241,7 @@ func bookDTO(b bookRow, reveal bool) map[string]any {
 		"id": b.ID, "businessId": b.BusinessID, "businessName": b.BizName, "businessSlug": b.Slug, "timezone": b.Timezone, "avatar": b.Avatar,
 		"serviceId": b.ServiceID, "serviceName": b.ServiceName, "staffId": b.StaffID, "staffName": b.StaffName,
 		"startsAt": b.Starts, "endsAt": b.Ends, "status": b.Status, "source": b.Source, "note": b.Note, "cancelReason": b.Reason,
-		"priceToman": b.Price, "durationMinutes": b.Duration, "customerName": name, "customerPhone": phone, "customerEmail": email, "mine": true,
+		"priceToman": b.Price, "durationMinutes": b.Duration, "customerName": name, "customerPhone": phone, "customerEmail": email, "customerNote": b.CustomerNote, "mine": true,
 	}
 }
 
@@ -256,11 +263,6 @@ func (s *Service) notify(q querier, userIDs []string, businessID, bookingID, kin
 		seen[id] = true
 		_, _ = q.Exec(`INSERT INTO notifications (id, user_id, business_id, booking_id, kind, title, body, channel, status, created_at) VALUES (?,?,?,?,?,?,?,'in_app','recorded',?)`,
 			newID(), id, businessID, bookingID, kind, title, body, now)
-	}
-	payload := `{"bookingId":"` + bookingID + `","kind":"` + kind + `"}`
-	for _, channel := range []string{"sms", "email"} {
-		_, _ = q.Exec(`INSERT INTO notification_jobs (id, channel, payload, status, last_error, created_at) VALUES (?,?,?,'skipped','no_provider',?)`,
-			newID(), channel, payload, now)
 	}
 }
 
@@ -288,11 +290,19 @@ func (s *Service) customerOnline(q querier, businessID, userID string) (string, 
 	if display == "" {
 		display = "مشتری"
 	}
-	var id string
-	err := q.QueryRow(`SELECT id FROM customers WHERE business_id = ? AND user_id = ?`, businessID, userID).Scan(&id)
+	var id, linkedUser string
+	err := q.QueryRow(`SELECT id, COALESCE(user_id, '') FROM customers WHERE business_id = ? AND user_id = ?`, businessID, userID).Scan(&id, &linkedUser)
 	if err == nil {
 		_, err = q.Exec(`UPDATE customers SET name = ?, phone = ? WHERE id = ?`, display, phone, id)
 		return id, err
+	}
+	if phone != "" {
+		var found, foundUser string
+		err = q.QueryRow(`SELECT id, COALESCE(user_id, '') FROM customers WHERE business_id = ? AND phone = ? ORDER BY created_at LIMIT 1`, businessID, phone).Scan(&found, &foundUser)
+		if err == nil && (foundUser == "" || foundUser == userID) {
+			_, err = q.Exec(`UPDATE customers SET user_id = ?, name = ?, phone = ? WHERE id = ?`, userID, display, phone, found)
+			return found, err
+		}
 	}
 	id = newID()
 	_, err = q.Exec(`INSERT INTO customers (id, business_id, user_id, name, phone, created_at) VALUES (?,?,?,?,?,?)`,
@@ -302,8 +312,11 @@ func (s *Service) customerOnline(q querier, businessID, userID string) (string, 
 
 func (s *Service) customerManual(q querier, businessID, name, phone string) (string, error) {
 	if phone != "" {
+		if normalized, nerr := normalizePhone(phone); nerr == nil {
+			phone = normalized
+		}
 		var id string
-		err := q.QueryRow(`SELECT id FROM customers WHERE business_id = ? AND phone = ? AND user_id IS NULL LIMIT 1`, businessID, phone).Scan(&id)
+		err := q.QueryRow(`SELECT id FROM customers WHERE business_id = ? AND phone = ? ORDER BY created_at LIMIT 1`, businessID, phone).Scan(&id)
 		if err == nil {
 			_, err = q.Exec(`UPDATE customers SET name = ? WHERE id = ?`, name, id)
 			return id, err
@@ -362,14 +375,29 @@ func (s *Service) BusinessBookings(userID string, raw map[string]any) (any, erro
 		return nil, err
 	}
 	from, to := "1970-01-01T00:00:00.000Z", "2999-01-01T00:00:00.000Z"
-	if day != "" {
-		safe, err := dayOf(day)
-		if err != nil {
-			return nil, err
+	fromDay, _ := textOf(raw, "from", 10, "")
+	toDay, _ := textOf(raw, "to", 10, "")
+	if day != "" || (fromDay != "" && toDay != "") {
+		var startDay, endDay string
+		if day != "" {
+			startDay, err = dayOf(day)
+			if err != nil {
+				return nil, err
+			}
+			endDay = startDay
+		} else {
+			startDay, err = dayOf(fromDay)
+			if err != nil {
+				return nil, err
+			}
+			endDay, err = dayOf(toDay)
+			if err != nil {
+				return nil, err
+			}
 		}
 		loc := mustZone(b.Timezone)
-		from = booking.ISO(booking.AtLocalMinute(safe, 0, loc))
-		to = booking.ISO(booking.AtLocalMinute(safe, 1440, loc))
+		from = booking.ISO(booking.AtLocalMinute(startDay, 0, loc))
+		to = booking.ISO(booking.AtLocalMinute(endDay, 1440, loc))
 	}
 	rows, err := s.db.Query(bookingSelect+` WHERE b.business_id = ? AND (? = '' OR b.status = ?) AND b.starts_at >= ? AND b.starts_at < ? AND (? = '' OR b.staff_id = ?) ORDER BY b.starts_at LIMIT 200`,
 		businessID, status, status, from, to, ownStaff, ownStaff)

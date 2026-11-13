@@ -21,7 +21,9 @@ import { CreateBusinessDialog } from "@/components/dashboard-header";
 import { useAccount, useBusinessId, type Membership } from "@/components/account";
 import { markReadFn, notificationsFn } from "@/lib/api";
 import { faNum } from "@/lib/booking/fa";
+import { formatWhen } from "@/lib/booking/format";
 import { focusNav } from "@/lib/business-focus";
+import { usePanelFollowups } from "@/lib/followups";
 import { signOut } from "@/lib/session";
 
 const nav = [
@@ -81,6 +83,8 @@ export function DesktopChrome() {
         phone={account.me?.profile.phone ?? ""}
         image={current?.avatar || account.me?.profile.avatar || ""}
         unread={account.me?.unread ?? 0}
+        personal={account.me?.profile.pageFor === "self" && current?.name === account.me?.profile.pageName}
+        staff={current?.role === "staff"}
         onChoose={(id) => {
           choose(id);
         }}
@@ -101,6 +105,8 @@ function DesktopSidebar({
   phone,
   image,
   unread,
+  personal,
+  staff,
   onChoose,
   onCreated,
 }: {
@@ -110,6 +116,8 @@ function DesktopSidebar({
   phone: string;
   image: string;
   unread: number;
+  personal: boolean;
+  staff: boolean;
   onChoose: (id: string) => void;
   onCreated: (id: string) => void;
 }) {
@@ -162,12 +170,20 @@ function DesktopSidebar({
     void navigate({ to: "/panel" });
   }
 
+  const { follow, overdue } = usePanelFollowups(businessId, personal, staff);
+  const open = follow.length + overdue.length;
+  const badge = unread + open;
+  const noteLine = [
+    unread > 0 ? `${faNum(unread)} خوانده‌نشده` : "",
+    open > 0 ? `${faNum(open)} پیگیری` : "",
+  ].filter(Boolean).join(" · ");
   const focus = focusNav(current?.categoryId);
   const staffMode = current?.role === "staff";
   const items = staffMode
     ? [
         { id: "dash", label: "داشبورد", icon: LayoutDashboard, to: "/panel" as const, exact: true },
         { id: "bookings", label: focus.label, icon: focus.kind === "booking" ? Calendar : ClipboardList, to: focus.to },
+        ...(focus.kind === "booking" ? [{ id: "orders", label: "سفارشات", icon: ClipboardList, to: "/panel/orders" as const }] : []),
         { id: "customers", label: "مشتریان", icon: Users, to: "/panel/customers" as const },
         { id: "reports", label: "گزارشات", icon: BarChart3, to: "/panel/reports" as const },
         { id: "support", label: "پشتیبانی", icon: LifeBuoy, to: "/support" as const },
@@ -266,12 +282,12 @@ function DesktopSidebar({
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
                 <span className="text-sm font-medium">اعلان‌ها</span>
-                {unread > 0 ? <span className="inline-flex rounded-full bg-copper px-2 py-0.5 text-xs font-medium text-on-ink">{faNum(unread)}</span> : null}
+                {badge > 0 ? <span className="inline-flex rounded-full bg-copper px-2 py-0.5 text-xs font-medium text-on-ink">{faNum(badge)}</span> : null}
               </span>
-              <span className="mt-0.5 block text-xs text-muted">{unread > 0 ? `${faNum(unread)} خوانده‌نشده` : "همه خوانده شده"}</span>
+              <span className="mt-0.5 block text-xs text-muted">{noteLine || "همه خوانده شده"}</span>
             </span>
           </button>
-          {menu === "notes" ? <NotesMenu onClose={() => setMenu("")} /> : null}
+          {menu === "notes" ? <NotesMenu businessId={businessId} personal={personal} staff={staff} unread={unread} onClose={() => setMenu("")} /> : null}
         </div>
         <div className="h-px bg-line" />
         <div className="relative" ref={userRef}>
@@ -335,8 +351,9 @@ function DesktopSidebar({
   );
 }
 
-function NotesMenu({ onClose }: { onClose: () => void }) {
-  const [notes, setNotes] = useState<{ id: string; title: string; body: string; read: boolean }[] | null>(null);
+function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessId: string; personal: boolean; staff: boolean; unread: number; onClose: () => void }) {
+  const [notes, setNotes] = useState<{ id: string; title: string; body: string; kind?: string; read: boolean }[] | null>(null);
+  const { follow, overdue, zone } = usePanelFollowups(businessId, personal, staff);
   function load() {
     notificationsFn().then((res) => {
       setNotes(res.ok ? res.data : []);
@@ -345,8 +362,11 @@ function NotesMenu({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     load();
   }, []);
+  const shownUnread = notes?.filter((note) => !note.read).length ?? 0;
+  const extra = notes ? Math.max(0, unread - shownUnread) : 0;
+  const empty = notes !== null && notes.length === 0 && follow.length === 0 && overdue.length === 0;
   return (
-    <div className="absolute bottom-0 right-full z-50 mr-2 flex w-64 flex-col rounded-lg border border-line bg-card p-1 shadow-md">
+    <div className="absolute bottom-0 right-full z-50 mr-2 flex w-72 flex-col rounded-lg border border-line bg-card p-1 shadow-md">
       <div className="flex items-center justify-between px-2 py-1.5">
         <span className="text-xs font-medium text-muted">اعلان‌ها</span>
         <button
@@ -365,13 +385,40 @@ function NotesMenu({ onClose }: { onClose: () => void }) {
       <div className="-mx-1 my-1 h-px bg-line" />
       <ul className="grid max-h-80 overflow-y-auto">
         {notes === null ? <li className="px-2 py-1.5 text-sm text-muted">در حال خواندن…</li> : null}
-        {notes && notes.length === 0 ? <li className="px-2 py-1.5 text-sm text-muted">اعلانی نیست.</li> : null}
-        {notes?.map((note) => (
-          <li key={note.id} className={`rounded-md px-2 py-1.5 ${note.read ? "text-muted" : "bg-paper"}`}>
-            <div className="text-sm font-medium">{note.title}</div>
-            <p className="mt-0.5 text-xs leading-5">{note.body}</p>
+        {empty ? <li className="px-2 py-1.5 text-sm text-muted">اعلانی نیست.</li> : null}
+        {follow.map((item) => (
+          <li key={item.id}>
+            <Link to={item.to} onClick={onClose} className="block rounded-md bg-paper px-2 py-1.5">
+              <div className="text-sm font-medium">نیاز به پیگیری</div>
+              <p className="mt-0.5 text-xs leading-5">{item.text}</p>
+            </Link>
           </li>
         ))}
+        {overdue.map((item) => (
+          <li key={item.id}>
+            <Link to="/panel" onClick={onClose} className="block rounded-md bg-paper px-2 py-1.5">
+              <div className="text-sm font-medium">تعیین وضعیت نوبت</div>
+              <p className="mt-0.5 text-xs leading-5">{item.customer || "مشتری"}{item.phone ? ` · ${faNum(item.phone)}` : ""}</p>
+              <p className="text-xs leading-5 text-muted">{formatWhen(item.startsAt, zone)} · {item.service} · {item.staff}</p>
+            </Link>
+          </li>
+        ))}
+        {notes?.map((note) => (
+          <li key={note.id} className={`rounded-md px-2 py-1.5 ${note.read ? "text-muted" : "bg-paper"}`}>
+            {note.kind === "menu_order" || note.kind === "booking_created" ? (
+              <Link to={note.kind === "menu_order" ? "/panel/orders" : "/panel/calendar"} onClick={onClose} className="block">
+                <div className="text-sm font-medium">{note.title}</div>
+                <p className="mt-0.5 whitespace-pre-line text-xs leading-5">{note.body}</p>
+              </Link>
+            ) : (
+              <>
+                <div className="text-sm font-medium">{note.title}</div>
+                <p className="mt-0.5 whitespace-pre-line text-xs leading-5">{note.body}</p>
+              </>
+            )}
+          </li>
+        ))}
+        {extra > 0 ? <li className="px-2 py-1.5 text-xs text-muted">و {faNum(extra)} اعلان دیگر در صفحهٔ اعلان‌ها</li> : null}
       </ul>
       <div className="-mx-1 my-1 h-px bg-line" />
       <Link to="/me" className={popItem} onClick={onClose}>همه اعلان‌ها</Link>

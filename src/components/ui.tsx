@@ -1,8 +1,7 @@
 import { cn } from "@/lib/cn";
 import { enDigits, faNum } from "@/lib/booking/fa";
-import { formatIranMobile, normalizeIranMobile } from "@/lib/iran-phone";
 import { Check } from "lucide-react";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 
 export function Button({
   variant = "primary",
@@ -164,22 +163,8 @@ export function TextInput({ value, onChange, type, inputMode, ...props }: InputH
   );
 }
 
-export function MobileInput({ value, onChange, id }: { value: string; onChange: (value: string) => void; id?: string }) {
-  return (
-    <div className="flex min-h-11 items-center overflow-hidden rounded-xl border border-line bg-card focus-within:ring-2 focus-within:ring-ink/20">
-      <input
-        id={id}
-        dir="ltr"
-        inputMode="tel"
-        autoComplete="tel"
-        placeholder={faNum("912 345 6789")}
-        value={faNum(formatIranMobile(value))}
-        onChange={(event) => onChange(normalizeIranMobile(event.target.value))}
-        className="h-11 min-w-0 flex-1 bg-transparent px-3 text-left text-sm text-ink outline-none placeholder:text-muted"
-      />
-      <span className="shrink-0 border-s border-line px-3 text-sm text-muted" dir="ltr">{faNum("+98")}</span>
-    </div>
-  );
+export function DialogActions({ children }: { children: ReactNode }) {
+  return <div className="flex justify-end gap-2">{children}</div>;
 }
 
 export function Area({ value, onChange, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
@@ -195,18 +180,6 @@ export function Area({ value, onChange, ...props }: TextareaHTMLAttributes<HTMLT
       }}
       className={cn(
         "min-h-24 w-full rounded-xl border border-line bg-card px-3 py-2 text-sm outline-none",
-        props.className,
-      )}
-    />
-  );
-}
-
-export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
-  return (
-    <select
-      {...props}
-      className={cn(
-        "min-h-11 w-full rounded-xl border border-line bg-card px-3 text-sm outline-none",
         props.className,
       )}
     />

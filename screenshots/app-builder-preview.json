@@ -7,9 +7,9 @@
       "status": 200,
       "title": "نوبتک — رزرو نوبت",
       "hasCanvas": false,
-      "bodyTextLen": 883,
-      "bodyTextHash": "a0b862d20992cf31e185bcceedb6717494069e0b24cde7c6482bf59fc6a91f77",
-      "bodyTextPrefix": "نوبتک کسب‌وکارها نوبت‌های من پنل کسب‌وکار شروع رایگان ورود نوبت‌",
+      "bodyTextLen": 893,
+      "bodyTextHash": "c7715c5bfd1d49a1ab0554bc2aa0f41681624bb06f5e7341b057ae7fe6b1f0ed",
+      "bodyTextPrefix": "نوبتک کسب‌وکارها نوبت‌های من پنل کسب‌وکار روشن تیره شروع رایگان ",
       "horizontalOverflow": false,
       "consoleErrors": [],
       "pageErrors": [],
@@ -21,11 +21,13 @@
       "status": 200,
       "title": "نوبتک — رزرو نوبت",
       "hasCanvas": false,
-      "bodyTextLen": 947,
-      "bodyTextHash": "2f1acd4734067f1d745cc9c5fd83e5e2cbe870956d42ed3f798d6a58908f0370",
-      "bodyTextPrefix": "نوبتک کسب‌وکارها نوبت‌های من پنل کسب‌وکار شروع رایگان ورود نوبت‌",
+      "bodyTextLen": 835,
+      "bodyTextHash": "634da2d654e5b69d2bd6089e602f5f12af1a79b3a71a458054a5751a286b639e",
+      "bodyTextPrefix": "نوبتک ورود نوبت‌دهی برای کسب‌وکارهای مستقل وقت مشتری، بدون تماس ",
       "horizontalOverflow": false,
-      "consoleErrors": [],
+      "consoleErrors": [
+        "A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch `if (typeof window !== 'undefined')`.\n- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML tag nesting.\n\nIt can also happen if the client has a browser extension installed which messes with the HTML before React loaded.\n\n%s%s https://react.dev/link/hydration-mismatch \n\n  ...\n    <Suspense fallback={null}>\n      <MatchImpl routeId=\"/\">\n        <MatchView router={{...}} match={{id:\"//\",ssr:true, ...}}>\n          <CatchBoundary getResetKey={function getResetKey} errorComponent={function AppErrorComponent} ...>\n            <MatchInnerImpl match={{id:\"//\",ssr:true, ...}}>\n              <Lazy>\n                <Home>\n                  <Shell>\n                    <div className={\"min-h-dvh \"}>\n                      <header className={\"sticky t...\"}>\n                        <div className=\"mx-auto fl...\">\n                          <a>\n                          <nav>\n                          <div>\n                          <div className=\"flex items...\" dir=\"ltr\">\n                            <input\n                              id=\"site-menu\"\n                              type=\"checkbox\"\n                              className=\"peer sr-only\"\n-                             style={{caret-color:\"transparent\"}}\n                            >\n                            ...\n                            ...\n                      ...\n"
+      ],
       "pageErrors": [],
       "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
     }

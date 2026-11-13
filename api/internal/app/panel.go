@@ -71,6 +71,15 @@ func (s *Service) UpdateBusiness(userID string, raw map[string]any) (any, error)
 	if err != nil {
 		return nil, err
 	}
+	if _, ok := raw["remindHours"]; ok {
+		hours, err := intOf(raw, "remindHours", 0, 72)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.db.Exec(`UPDATE businesses SET remind_hours = ? WHERE id = ?`, hours, businessID); err != nil {
+			return nil, err
+		}
+	}
 	if _, ok := raw["avatar"]; ok {
 		if _, err := s.writeAvatar(userID, businessID, raw["avatar"]); err != nil {
 			return nil, err
@@ -157,6 +166,7 @@ type pageItem struct {
 	PriceType  string        `json:"priceType"`
 	SKU        string        `json:"sku"`
 	Link       string        `json:"link"`
+	Unit       string        `json:"unit"`
 	Featured   bool          `json:"featured"`
 	CategoryID string        `json:"categoryId"`
 	Labels     []string      `json:"labels"`
@@ -169,17 +179,17 @@ func cleanPageBlocks(value any) (string, error) {
 		return "", fail(400, "VALIDATION", "بلوک‌های صفحه معتبر نیست")
 	}
 	var items []struct {
-		ID      string `json:"id"`
-		Type    string `json:"type"`
-		Active  bool   `json:"active"`
-		Starred bool   `json:"starred"`
-		Title   string `json:"title"`
-		URL     string `json:"url"`
-		Icon    string `json:"icon"`
-		Body    string `json:"body"`
-		Align   string `json:"align"`
-		Image   string `json:"image"`
-		ImagePos string `json:"imagePos"`
+		ID       string     `json:"id"`
+		Type     string     `json:"type"`
+		Active   bool       `json:"active"`
+		Starred  bool       `json:"starred"`
+		Title    string     `json:"title"`
+		URL      string     `json:"url"`
+		Icon     string     `json:"icon"`
+		Body     string     `json:"body"`
+		Align    string     `json:"align"`
+		Image    string     `json:"image"`
+		ImagePos string     `json:"imagePos"`
 		Layout   string     `json:"layout"`
 		Currency string     `json:"currency"`
 		Items    []pageItem `json:"items"`
@@ -202,7 +212,7 @@ func cleanPageBlocks(value any) (string, error) {
 		}
 		seen[id] = true
 		if item.Type == "design" {
-			body := clip(strings.TrimSpace(item.Body), 4000)
+			body := clip(strings.TrimSpace(item.Body), 500000)
 			row := map[string]any{"id": id, "type": item.Type, "active": true, "starred": false}
 			if body != "" {
 				row["body"] = body
@@ -217,8 +227,8 @@ func cleanPageBlocks(value any) (string, error) {
 		var err error
 		if item.Type == "booking" {
 			url, err = cleanBookingPath(item.URL)
-		} else if item.Type == "menu" {
-			url, err = cleanMenuPath(item.URL)
+		} else if item.Type == "menu" || item.Type == "products" || item.Type == "services" {
+			url, err = cleanCatalogPath(item.Type, item.URL)
 		} else {
 			url, err = cleanLinkURL(item.URL)
 		}
@@ -364,7 +374,7 @@ func cleanPageBlocks(value any) (string, error) {
 				row["image"] = img
 			}
 		}
-		if item.Type == "menu" {
+		if item.Type == "menu" || item.Type == "products" || item.Type == "services" {
 			note := clip(strings.ReplaceAll(strings.TrimSpace(item.Body), "\n", " "), 100)
 			if note == "" {
 				delete(row, "body")
@@ -372,7 +382,7 @@ func cleanPageBlocks(value any) (string, error) {
 				row["body"] = note
 			}
 			if url == "" {
-				url = "menu"
+				url = catalogFallback(item.Type)
 			}
 			row["url"] = url
 			layout := item.Layout
@@ -429,6 +439,16 @@ func cleanMenuItems(items []pageItem) ([]map[string]any, error) {
 	seen := map[string]bool{}
 	cats := map[string]bool{}
 	for _, item := range items {
+		if item.Kind == "unit" {
+			id := strings.TrimSpace(item.ID)
+			title := clip(strings.ReplaceAll(strings.TrimSpace(item.Title), "\n", " "), 24)
+			if id == "" || len(id) > 80 || seen[id] || title == "" {
+				continue
+			}
+			seen[id] = true
+			out = append(out, map[string]any{"id": id, "kind": "unit", "title": title})
+			continue
+		}
 		if item.Kind != "category" {
 			continue
 		}
@@ -464,11 +484,11 @@ func cleanMenuItems(items []pageItem) ([]map[string]any, error) {
 		seen[id] = true
 		row := map[string]any{
 			"id": id, "kind": "item", "title": title,
-			"value": clip(strings.TrimSpace(item.Value), 100),
-			"price": item.Price,
-			"status": menuStatus(item.Status),
+			"value":     clip(strings.TrimSpace(item.Value), 100),
+			"price":     item.Price,
+			"status":    menuStatus(item.Status),
 			"priceType": menuPriceType(item.PriceType),
-			"featured": item.Featured,
+			"featured":  item.Featured,
 		}
 		if item.Price < 0 {
 			row["price"] = 0
@@ -489,6 +509,9 @@ func cleanMenuItems(items []pageItem) ([]map[string]any, error) {
 		}
 		if item.CategoryID != "" && cats[item.CategoryID] {
 			row["categoryId"] = item.CategoryID
+		}
+		if unit := clip(strings.ReplaceAll(strings.TrimSpace(item.Unit), "\n", " "), 24); unit != "" {
+			row["unit"] = unit
 		}
 		sku := clip(strings.TrimSpace(item.SKU), 40)
 		if sku != "" {
@@ -745,15 +768,30 @@ func cleanSocialItems(items []pageItem) ([]map[string]any, error) {
 	return out, nil
 }
 
-func cleanMenuPath(value string) (string, error) {
+func catalogFallback(kind string) string {
+	switch kind {
+	case "products":
+		return "products"
+	case "services":
+		return "services"
+	default:
+		return "menu"
+	}
+}
+
+func cleanCatalogPath(kind, value string) (string, error) {
 	value = strings.Trim(strings.TrimSpace(value), "/")
 	if value == "" {
-		return "menu", nil
+		return catalogFallback(kind), nil
 	}
 	if len([]rune(value)) > 40 || strings.ContainsAny(value, " \n\r?#/\\") {
-		return "", fail(400, "VALIDATION", "نشانی صفحه منو معتبر نیست")
+		return "", fail(400, "VALIDATION", "نشانی صفحه معتبر نیست")
 	}
 	return value, nil
+}
+
+func cleanMenuPath(value string) (string, error) {
+	return cleanCatalogPath("menu", value)
 }
 
 func cleanBookingPath(value string) (string, error) {
@@ -885,14 +923,30 @@ func (s *Service) SaveService(userID string, raw map[string]any) (any, error) {
 	}
 	desc, _ := textOf(raw, "description", 1000, "")
 	active := bint(notFalse(raw, "active"))
+	photo := ""
+	photoSet := false
+	if _, ok := raw["photo"]; ok {
+		photoSet = true
+		if rawPhoto, _ := raw["photo"].(string); strings.TrimSpace(rawPhoto) != "" {
+			photo, err = cleanBlockImage(rawPhoto)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 	var existing string
 	err = s.db.QueryRow(`SELECT id FROM services WHERE id = ? AND business_id = ?`, serviceID, businessID).Scan(&existing)
 	if err == nil {
-		_, err = s.db.Exec(`UPDATE services SET name=?, description=?, duration_minutes=?, buffer_minutes=?, price_toman=?, active=? WHERE id=? AND business_id=?`,
-			name, desc, duration, buffer, price, active, serviceID, businessID)
+		if photoSet {
+			_, err = s.db.Exec(`UPDATE services SET name=?, description=?, duration_minutes=?, buffer_minutes=?, price_toman=?, active=?, photo=? WHERE id=? AND business_id=?`,
+				name, desc, duration, buffer, price, active, photo, serviceID, businessID)
+		} else {
+			_, err = s.db.Exec(`UPDATE services SET name=?, description=?, duration_minutes=?, buffer_minutes=?, price_toman=?, active=? WHERE id=? AND business_id=?`,
+				name, desc, duration, buffer, price, active, serviceID, businessID)
+		}
 	} else if err == sql.ErrNoRows {
-		_, err = s.db.Exec(`INSERT INTO services (id, business_id, branch_id, name, description, duration_minutes, buffer_minutes, price_toman, active) VALUES (?,?,?,?,?,?,?,?,?)`,
-			serviceID, businessID, branch, name, desc, duration, buffer, price, active)
+		_, err = s.db.Exec(`INSERT INTO services (id, business_id, branch_id, name, description, duration_minutes, buffer_minutes, price_toman, active, photo) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			serviceID, businessID, branch, name, desc, duration, buffer, price, active, photo)
 	}
 	if err != nil {
 		return nil, err
@@ -1003,16 +1057,19 @@ func (s *Service) SaveStaff(userID string, raw map[string]any) (any, error) {
 			return nil, err
 		}
 	}
-	var linked string
-	_ = s.db.QueryRow(`SELECT COALESCE(user_id, '') FROM staff WHERE id = ?`, staffID).Scan(&linked)
-	invite := ""
+	var linked, invite string
+	_ = s.db.QueryRow(`SELECT COALESCE(user_id, ''), COALESCE(invite_token, '') FROM staff WHERE id = ?`, staffID).Scan(&linked, &invite)
 	if linked == "" {
-		invite = newID()
+		if invite == "" {
+			invite = newID()
+		}
 		if _, err := s.db.Exec(`UPDATE staff SET phone = ?, invite_token = ? WHERE id = ?`, phone, invite, staffID); err != nil {
 			return nil, err
 		}
 	} else if _, err := s.db.Exec(`UPDATE staff SET phone = ? WHERE id = ?`, phone, staffID); err != nil {
 		return nil, err
+	} else {
+		invite = ""
 	}
 	return map[string]any{"staffId": staffID, "inviteToken": invite}, nil
 }
@@ -1096,6 +1153,9 @@ func (s *Service) AcceptStaffInvite(raw map[string]any) (any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	token := strings.TrimSpace(mustString(raw, "token"))
+	if !s.rate("invite-accept:"+token, 8, time.Minute) {
+		return nil, fail(429, "RATE", "تلاش زیاد بود. کمی بعد دوباره تلاش کنید")
+	}
 	row, err := s.inviteRow(token)
 	if err != nil {
 		return nil, err
@@ -1305,21 +1365,21 @@ func (s *Service) SaveSchedule(userID string, raw map[string]any) (any, error) {
 					return nil, err
 				}
 			}
-			continue
-		}
-		startMin, err := intOf(day, "startMin", 0, 1439)
-		if err != nil {
-			return nil, err
-		}
-		endMin, err := intOf(day, "endMin", 1, 1440)
-		if err != nil {
-			return nil, err
-		}
-		if endMin <= startMin {
-			return nil, fail(400, "VALIDATION", "ساعت پایان باید بعد از شروع باشد")
-		}
-		if _, err := s.db.Exec(`INSERT INTO working_hours (id, staff_id, weekday, start_min, end_min) VALUES (?,?,?,?,?)`, newID(), staffID, weekday, startMin, endMin); err != nil {
-			return nil, err
+		} else {
+			startMin, err := intOf(day, "startMin", 0, 1439)
+			if err != nil {
+				return nil, err
+			}
+			endMin, err := intOf(day, "endMin", 1, 1440)
+			if err != nil {
+				return nil, err
+			}
+			if endMin <= startMin {
+				return nil, fail(400, "VALIDATION", "ساعت پایان باید بعد از شروع باشد")
+			}
+			if _, err := s.db.Exec(`INSERT INTO working_hours (id, staff_id, weekday, start_min, end_min) VALUES (?,?,?,?,?)`, newID(), staffID, weekday, startMin, endMin); err != nil {
+				return nil, err
+			}
 		}
 		if day["breakStart"] == nil || day["breakEnd"] == nil || day["breakStart"] == "" || day["breakEnd"] == "" {
 			continue
@@ -1332,7 +1392,7 @@ func (s *Service) SaveSchedule(userID string, raw map[string]any) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if be <= bs || bs < startMin || be > endMin {
+		if be <= bs {
 			return nil, fail(400, "VALIDATION", "بازه استراحت باید داخل ساعت کاری باشد")
 		}
 		if _, err := s.db.Exec(`INSERT INTO breaks (id, staff_id, weekday, start_min, end_min) VALUES (?,?,?,?,?)`, newID(), staffID, weekday, bs, be); err != nil {
@@ -1402,12 +1462,16 @@ func (s *Service) ListCustomers(userID string, raw map[string]any) (any, error) 
 		return nil, err
 	}
 	rows, err := s.db.Query(`
-		SELECT c.id, c.name, c.phone, c.notes, c.group_name, c.first_name, c.last_name, c.birth_date, c.address, c.customer_note, COUNT(b.id), MAX(b.starts_at)
+		SELECT c.id, c.name, c.phone, c.notes, c.group_name, c.first_name, c.last_name, c.birth_date, c.address, c.customer_note,
+		       COUNT(CASE WHEN b.status = 'completed' THEN 1 END),
+		       MAX(CASE WHEN b.status = 'completed' THEN b.starts_at END)
 		FROM customers c
-		LEFT JOIN bookings b ON b.customer_id = c.id AND b.status <> 'cancelled'
+		LEFT JOIN bookings b ON b.customer_id = c.id
 		WHERE c.business_id = ?
-		  AND (? = '' OR c.name LIKE ? ESCAPE '\' OR c.phone LIKE ? ESCAPE '\')
-		GROUP BY c.id ORDER BY c.created_at DESC LIMIT 80`, businessID, q, like(q), like(q))
+		  AND (? = '' OR c.name LIKE ? ESCAPE '\' OR c.first_name LIKE ? ESCAPE '\' OR c.last_name LIKE ? ESCAPE '\'
+		       OR c.phone LIKE ? ESCAPE '\' OR c.address LIKE ? ESCAPE '\' OR c.notes LIKE ? ESCAPE '\'
+		       OR c.customer_note LIKE ? ESCAPE '\' OR c.birth_date LIKE ? ESCAPE '\')
+		GROUP BY c.id ORDER BY c.created_at DESC`, businessID, q, like(q), like(q), like(q), like(q), like(q), like(q), like(q), like(q))
 	if err != nil {
 		return nil, err
 	}
@@ -1426,6 +1490,9 @@ func (s *Service) ListCustomers(userID string, raw map[string]any) (any, error) 
 		var lastVal any
 		if last.Valid {
 			lastVal = last.String
+		}
+		if strings.TrimSpace(groupName) == "" {
+			groupName = "بدون گروه"
 		}
 		out = append(out, map[string]any{
 			"id": id, "name": name, "firstName": firstName, "lastName": lastName, "phone": phone,
@@ -1458,6 +1525,12 @@ func (s *Service) SaveCustomer(userID string, raw map[string]any) (any, error) {
 		return nil, err
 	}
 	phone, _ := textOf(raw, "phone", 20, "")
+	if strings.TrimSpace(phone) != "" {
+		phone, err = normalizePhone(phone)
+		if err != nil {
+			return nil, err
+		}
+	}
 	_, hasNotes := raw["notes"]
 	notes, _ := textOf(raw, "notes", 500, "")
 	_, hasCustomerNote := raw["customerNote"]
@@ -1467,7 +1540,10 @@ func (s *Service) SaveCustomer(userID string, raw map[string]any) (any, error) {
 	_, hasAddress := raw["address"]
 	address, _ := textOf(raw, "address", 200, "")
 	groupName, _ := textOf(raw, "group", 40, "")
-	if groupName != "" {
+	if strings.TrimSpace(groupName) == "" {
+		groupName = "بدون گروه"
+	}
+	if groupName != "بدون گروه" {
 		if !defaultCustomerGroup(groupName) {
 			var n int
 			if err := s.db.QueryRow(`SELECT COUNT(*) FROM customer_groups WHERE business_id = ? AND name = ?`, businessID, groupName).Scan(&n); err != nil {
@@ -1479,11 +1555,18 @@ func (s *Service) SaveCustomer(userID string, raw map[string]any) (any, error) {
 		}
 	}
 	customerID, _ := textOf(raw, "id", 80, "")
+	if customerID == "" && phone != "" {
+		_ = s.db.QueryRow(`SELECT id FROM customers WHERE business_id = ? AND phone = ? ORDER BY created_at LIMIT 1`, businessID, phone).Scan(&customerID)
+	}
 	if customerID == "" {
 		customerID = newID()
 	}
 	var existing string
 	err = s.db.QueryRow(`SELECT id FROM customers WHERE id = ? AND business_id = ?`, customerID, businessID).Scan(&existing)
+	var oldNotes string
+	if existing != "" {
+		_ = s.db.QueryRow(`SELECT notes FROM customers WHERE id = ?`, customerID).Scan(&oldNotes)
+	}
 	if err == nil {
 		if !hasNotes || !hasCustomerNote || !hasBirth || !hasAddress {
 			var oldNotes, oldCustomer, oldBirth, oldAddress string
@@ -1510,7 +1593,127 @@ func (s *Service) SaveCustomer(userID string, raw map[string]any) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(oldNotes) != "" && oldNotes != notes {
+		_, _ = s.db.Exec(`INSERT INTO customer_notes (id, business_id, customer_id, body, created_at) VALUES (?,?,?,?,?)`,
+			newID(), businessID, customerID, oldNotes, s.now().UTC().Format(time.RFC3339))
+	}
+	_, _ = s.db.Exec(`UPDATE bookings SET customer_name = ?, customer_phone = ? WHERE customer_id = ?`, name, phone, customerID)
 	return map[string]any{"customerId": customerID}, nil
+}
+
+func (s *Service) DeleteCustomer(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, err := textOf(raw, "businessId", 80, "")
+	if err != nil {
+		return nil, err
+	}
+	customerID, err := textOf(raw, "id", 80, "")
+	if err != nil || customerID == "" {
+		return nil, fail(400, "VALIDATION", "مشتری پیدا نشد")
+	}
+	role, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff")
+	if err != nil {
+		return nil, err
+	}
+	if role == "staff" {
+		staffID, err := s.ownStaffID(s.db, userID, businessID)
+		if err != nil {
+			return nil, err
+		}
+		var mine, others int
+		if err := s.db.QueryRow(`SELECT
+			COALESCE(SUM(CASE WHEN staff_id = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN staff_id <> ? THEN 1 ELSE 0 END), 0)
+			FROM bookings WHERE business_id = ? AND customer_id = ?`, staffID, staffID, businessID, customerID).Scan(&mine, &others); err != nil {
+			return nil, err
+		}
+		if mine == 0 || others > 0 {
+			return nil, fail(403, "FORBIDDEN", "فقط مشتری خودتان را می‌توانید حذف کنید")
+		}
+	}
+	_, _ = s.db.Exec(`UPDATE bookings SET customer_name = (SELECT name FROM customers WHERE id = ?), customer_phone = (SELECT phone FROM customers WHERE id = ?) WHERE customer_id = ? AND business_id = ?`, customerID, customerID, customerID, businessID)
+	res, err := s.db.Exec(`DELETE FROM customers WHERE id = ? AND business_id = ?`, customerID, businessID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fail(404, "NOT_FOUND", "مشتری پیدا نشد")
+	}
+	return map[string]any{"removed": true}, nil
+}
+
+func (s *Service) CustomerFile(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, _ := textOf(raw, "businessId", 80, "")
+	customerID, err := textOf(raw, "id", 80, "")
+	if err != nil || customerID == "" {
+		return nil, fail(400, "VALIDATION", "مشتری پیدا نشد")
+	}
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
+		return nil, err
+	}
+	var phone string
+	err = s.db.QueryRow(`SELECT phone FROM customers WHERE id = ? AND business_id = ?`, customerID, businessID).Scan(&phone)
+	if err == sql.ErrNoRows {
+		return nil, fail(404, "NOT_FOUND", "مشتری پیدا نشد")
+	}
+	if err != nil {
+		return nil, err
+	}
+	brows, err := s.db.Query(`
+		SELECT b.id, s.name, st.name, b.starts_at, b.status
+		FROM bookings b
+		JOIN services s ON s.id = b.service_id
+		JOIN staff st ON st.id = b.staff_id
+		WHERE b.business_id = ? AND b.customer_id = ?
+		ORDER BY b.starts_at DESC LIMIT 30`, businessID, customerID)
+	if err != nil {
+		return nil, err
+	}
+	bookings := []map[string]any{}
+	for brows.Next() {
+		var id, service, staff, starts, status string
+		if err := brows.Scan(&id, &service, &staff, &starts, &status); err != nil {
+			brows.Close()
+			return nil, err
+		}
+		bookings = append(bookings, map[string]any{"id": id, "service": service, "staff": staff, "startsAt": starts, "status": status})
+	}
+	brows.Close()
+	orders := []map[string]any{}
+	if phone != "" {
+		orows, err := s.db.Query(`SELECT id, item_title, status, created_at, price FROM menu_orders WHERE business_id = ? AND phone = ? ORDER BY created_at DESC LIMIT 20`, businessID, phone)
+		if err != nil {
+			return nil, err
+		}
+		for orows.Next() {
+			var id, title, status, created string
+			var price int
+			if err := orows.Scan(&id, &title, &status, &created, &price); err != nil {
+				orows.Close()
+				return nil, err
+			}
+			orders = append(orders, map[string]any{"id": id, "title": title, "status": status, "createdAt": created, "price": price})
+		}
+		orows.Close()
+	}
+	nrows, err := s.db.Query(`SELECT id, body, created_at FROM customer_notes WHERE business_id = ? AND customer_id = ? ORDER BY created_at DESC LIMIT 20`, businessID, customerID)
+	if err != nil {
+		return nil, err
+	}
+	notes := []map[string]any{}
+	for nrows.Next() {
+		var id, body, created string
+		if err := nrows.Scan(&id, &body, &created); err != nil {
+			nrows.Close()
+			return nil, err
+		}
+		notes = append(notes, map[string]any{"id": id, "body": body, "createdAt": created})
+	}
+	nrows.Close()
+	return map[string]any{"bookings": bookings, "orders": orders, "notes": notes}, nil
 }
 
 func splitPersonName(full string) (string, string) {
@@ -1544,7 +1747,7 @@ func (s *Service) SaveCustomerGroup(userID string, raw map[string]any) (any, err
 	if err != nil || len([]rune(name)) < 2 {
 		return nil, fail(400, "VALIDATION", "نام گروه را وارد کنید")
 	}
-	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager"); err != nil {
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
 		return nil, err
 	}
 	if defaultCustomerGroup(name) {
@@ -1572,7 +1775,7 @@ func (s *Service) RenameCustomerGroup(userID string, raw map[string]any) (any, e
 	if err != nil || len([]rune(name)) < 2 {
 		return nil, fail(400, "VALIDATION", "نام گروه را وارد کنید")
 	}
-	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager"); err != nil {
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
 		return nil, err
 	}
 	if defaultCustomerGroup(name) {
@@ -1602,7 +1805,7 @@ func (s *Service) DeleteCustomerGroup(userID string, raw map[string]any) (any, e
 	if err != nil || id == "" {
 		return nil, fail(400, "VALIDATION", "گروه پیدا نشد")
 	}
-	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager"); err != nil {
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
 		return nil, err
 	}
 	var name string
@@ -1687,7 +1890,10 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 		}
 		srows.Close()
 	}
-	type win struct{ staff, kind string; weekday, start, end int }
+	type win struct {
+		staff, kind         string
+		weekday, start, end int
+	}
 	var hours, breaks []win
 	hrows, _ := s.db.Query(`SELECT staff_id, weekday, start_min, end_min FROM working_hours WHERE staff_id IN (SELECT id FROM staff WHERE business_id = ? AND active = 1)`, businessID)
 	for hrows.Next() {
@@ -1703,7 +1909,10 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 		breaks = append(breaks, w)
 	}
 	brows.Close()
-	type hol struct{ staff sql.NullString; date string }
+	type hol struct {
+		staff sql.NullString
+		date  string
+	}
 	var holidays []hol
 	orows, _ := s.db.Query(`SELECT staff_id, date_local FROM holidays WHERE business_id = ? AND date_local >= ? AND date_local <= ?`, businessID, from, to)
 	for orows.Next() {
@@ -1795,22 +2004,31 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 	if free < 0 {
 		free = 0
 	}
-	booked, cancelled, completed, revenue := 0, 0, 0, 0
-	viewsSeries := make([]int, 30)
-	visitorSeries := make([]int, 30)
-	salesSeries := make([]int, 30)
-	revenueSeries := make([]int, 30)
-	days := make([]string, 30)
-	dayIndex := map[string]int{}
-	for i := 0; i < 30; i++ {
-		days[i] = booking.AddDaysYMD(today, i-29, loc)
-		dayIndex[days[i]] = i
+	days, prevFrom, prevTo := shamsiWindow(loc, s.now())
+	nDays := len(days)
+	if nDays == 0 {
+		nDays = 1
+		days = []string{today}
 	}
-	vrows, verr := s.db.Query(`SELECT day, views, visitors FROM page_view_days WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, days[0], days[29])
+	focus := "booking"
+	if b.CategoryID.Valid && orderFocus(b.CategoryID.String) {
+		focus = "orders"
+	}
+	booked, cancelled, missed, completed, revenue := 0, 0, 0, 0, 0
+	prevBooked, prevCancelled, prevMissed, prevCompleted, prevRevenue := 0, 0, 0, 0, 0
+	viewsSeries := make([]int, nDays)
+	visitorSeries := make([]int, nDays)
+	doneSeries := make([]int, nDays)
+	revenueSeries := make([]int, nDays)
+	orderSeries := make([]int, nDays)
+	orderRevenueSeries := make([]int, nDays)
+	dayIndex := map[string]int{}
+	for i, day := range days {
+		dayIndex[day] = i
+	}
 	viewTotal, visitorTotal, clickTotal := 0, 0, 0
 	prevViews, prevVisitors, prevClicks := 0, 0, 0
-	prevBooked, prevCancelled, prevCompleted, prevRevenue := 0, 0, 0, 0
-	prevStart := booking.AddDaysYMD(days[0], -30, loc)
+	vrows, verr := s.db.Query(`SELECT day, views, visitors FROM page_view_days WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, days[0], days[nDays-1])
 	if verr == nil {
 		for vrows.Next() {
 			var day string
@@ -1825,7 +2043,7 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 		}
 		vrows.Close()
 	}
-	prows, perr := s.db.Query(`SELECT day, views, visitors FROM page_view_days WHERE business_id = ? AND day >= ? AND day < ?`, businessID, prevStart, days[0])
+	prows, perr := s.db.Query(`SELECT day, views, visitors FROM page_view_days WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, prevFrom, prevTo)
 	if perr == nil {
 		for prows.Next() {
 			var day string
@@ -1836,7 +2054,7 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 		}
 		prows.Close()
 	}
-	crows2, cerr := s.db.Query(`SELECT day, clicks FROM page_clicks WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, prevStart, days[29])
+	crows2, cerr := s.db.Query(`SELECT day, clicks FROM page_clicks WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, prevFrom, days[nDays-1])
 	if cerr == nil {
 		for crows2.Next() {
 			var day string
@@ -1844,17 +2062,18 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 			_ = crows2.Scan(&day, &n)
 			if _, ok := dayIndex[day]; ok {
 				clickTotal += n
-			} else if day >= prevStart && day < days[0] {
+			} else if day >= prevFrom && day <= prevTo {
 				prevClicks += n
 			}
 		}
 		crows2.Close()
 	}
-	fromInstant := booking.ISO(booking.AtLocalMinute(prevStart, 0, loc))
+	fromInstant := booking.ISO(booking.AtLocalMinute(prevFrom, 0, loc))
+	untilInstant := booking.ISO(booking.AtLocalMinute(days[nDays-1], 1440, loc))
 	bookSQL := `SELECT b.status, b.starts_at, COALESCE(sv.price_toman, 0)
 		FROM bookings b LEFT JOIN services sv ON sv.id = b.service_id
-		WHERE b.business_id = ? AND b.starts_at >= ?`
-	bookArgs := []any{businessID, fromInstant}
+		WHERE b.business_id = ? AND b.starts_at >= ? AND b.starts_at < ?`
+	bookArgs := []any{businessID, fromInstant, untilInstant}
 	if ownStaff != "" {
 		bookSQL += ` AND b.staff_id = ?`
 		bookArgs = append(bookArgs, ownStaff)
@@ -1881,48 +2100,143 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 			if err == nil {
 				day = booking.TodayYMD(loc, when)
 			}
-			i, ok := dayIndex[day]
+			i, current := dayIndex[day]
+			prev := day >= prevFrom && day <= prevTo
 			switch status {
 			case "cancelled":
-				if ok {
+				if current {
 					cancelled++
-				} else if day >= prevStart && day < days[0] {
+				} else if prev {
 					prevCancelled++
 				}
+			case "no_show":
+				if current {
+					missed++
+				} else if prev {
+					prevMissed++
+				}
 			case "completed":
-				if ok {
+				if current {
 					completed++
 					revenue += price
-					salesSeries[i]++
+					doneSeries[i]++
 					revenueSeries[i] += price
-				} else if day >= prevStart && day < days[0] {
+				} else if prev {
 					prevCompleted++
 					prevRevenue += price
 				}
 			case "pending", "confirmed":
-				if ok {
+				if current {
 					booked++
-				} else if day >= prevStart && day < days[0] {
+				} else if prev {
 					prevBooked++
 				}
 			}
 		}
 		brows.Close()
 	}
-	booked += completed
-	prevBooked += prevCompleted
+	booked += completed + cancelled + missed
+	prevBooked += prevCompleted + prevCancelled + prevMissed
+	orders, orderCancelled, orderRevenue := 0, 0, 0
+	prevOrders, prevOrderRevenue := 0, 0
+	orderMoney := true
+	orows2, oerr := s.db.Query(`SELECT created_at, price, status, priced, currency FROM menu_orders WHERE business_id = ? AND created_at >= ? AND created_at < ?`, businessID, fromInstant, untilInstant)
+	if oerr == nil {
+		for orows2.Next() {
+			var at, status, currency string
+			var price, priced int
+			if orows2.Scan(&at, &price, &status, &priced, &currency) != nil {
+				continue
+			}
+			when, err := time.Parse(time.RFC3339Nano, at)
+			if err != nil {
+				when, err = time.Parse(time.RFC3339, at)
+			}
+			day := ""
+			if err == nil {
+				day = booking.TodayYMD(loc, when)
+			}
+			i, current := dayIndex[day]
+			prev := day >= prevFrom && day <= prevTo
+			if status == "cancelled" {
+				if current {
+					orderCancelled++
+				}
+				continue
+			}
+			if current {
+				orders++
+				orderSeries[i]++
+				if priced != 0 && (currency == "" || currency == "toman") {
+					orderRevenue += price
+					orderRevenueSeries[i] += price
+				} else if priced != 0 {
+					orderMoney = false
+				}
+			} else if prev {
+				prevOrders++
+				if priced != 0 && (currency == "" || currency == "toman") {
+					prevOrderRevenue += price
+				}
+			}
+		}
+		orows2.Close()
+	}
+	converted, prevConverted := 0, 0
+	if focus == "orders" {
+		converted, prevConverted = orders, prevOrders
+	} else if ownStaff == "" {
+		windowStart := booking.ISO(booking.AtLocalMinute(days[0], 0, loc))
+		_ = s.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE business_id = ? AND source = 'online' AND starts_at >= ? AND starts_at < ?`, businessID, windowStart, untilInstant).Scan(&converted)
+		_ = s.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE business_id = ? AND source = 'online' AND starts_at >= ? AND starts_at < ?`, businessID, fromInstant, booking.ISO(booking.AtLocalMinute(prevTo, 1440, loc))).Scan(&prevConverted)
+	}
 	return map[string]any{
-		"from": from, "to": to, "timezone": b.Timezone, "today": todayN, "byStatus": byStatus,
+		"from": from, "to": to, "timezone": b.Timezone, "today": todayN, "byStatus": byStatus, "focus": focus,
 		"capacity": map[string]any{"availableMinutes": available, "occupiedMinutes": occupied, "freeMinutes": free, "formula": capacityFormula},
 		"stats": map[string]any{
 			"views": viewTotal, "visitors": visitorTotal, "clicks": clickTotal,
-			"booked": booked, "cancelled": cancelled, "completed": completed, "sales": completed, "revenueToman": revenue,
+			"booked": booked, "cancelled": cancelled, "missed": missed, "completed": completed, "revenueToman": revenue,
+			"converted": converted, "orders": orders, "orderCancelled": orderCancelled, "orderRevenue": orderRevenue, "orderMoney": orderMoney,
 			"prevViews": prevViews, "prevVisitors": prevVisitors, "prevClicks": prevClicks,
-			"prevBooked": prevBooked, "prevCancelled": prevCancelled, "prevCompleted": prevCompleted, "prevRevenueToman": prevRevenue,
+			"prevBooked": prevBooked, "prevCancelled": prevCancelled, "prevMissed": prevMissed, "prevCompleted": prevCompleted, "prevRevenueToman": prevRevenue,
+			"prevConverted": prevConverted, "prevOrders": prevOrders, "prevOrderRevenue": prevOrderRevenue,
 		},
 		"series": map[string]any{
-			"views": viewsSeries, "visitors": visitorSeries, "sales": salesSeries, "revenue": revenueSeries,
+			"views": viewsSeries, "visitors": visitorSeries, "done": doneSeries, "revenue": revenueSeries,
+			"orders": orderSeries, "orderRevenue": orderRevenueSeries,
 		},
 		"overdue": s.overdueList(businessID, ownStaff),
 	}, nil
+}
+
+func orderFocus(category string) bool {
+	switch category {
+	case "cat-restaurant", "cat-cafe", "cat-fastfood", "cat-shop", "cat-service":
+		return true
+	default:
+		return false
+	}
+}
+
+func shamsiWindow(loc *time.Location, now time.Time) (days []string, prevFrom, prevTo string) {
+	local := now.In(loc)
+	jy, jm, jd := booking.ToJalali(local.Year(), int(local.Month()), local.Day())
+	for d := 1; d <= jd; d++ {
+		gy, gm, gd := booking.ToGregorian(jy, jm, d)
+		days = append(days, booking.YMD(gy, gm, gd))
+	}
+	py, pm := jy, jm-1
+	if pm < 1 {
+		pm = 12
+		py--
+	}
+	end := jd
+	if n := booking.JalaliMonthLength(py, pm); end > n {
+		end = n
+	}
+	gy, gm, gd := booking.ToGregorian(py, pm, 1)
+	prevFrom = booking.YMD(gy, gm, gd)
+	gy, gm, gd = booking.ToGregorian(py, pm, end)
+	prevTo = booking.YMD(gy, gm, gd)
+	return days, prevFrom, prevTo
 }

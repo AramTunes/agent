@@ -3,10 +3,12 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
 import { JalaliCalendar } from "@/components/jalali-calendar";
-import { Button, Card, Empty, Field, Area, Select, Skeleton, TextInput } from "@/components/ui";
+import { Button, Card, Empty, Field, Area, Skeleton, TextInput } from "@/components/ui";
+import { Select } from "@/components/ui/select";
+import { WEEKDAYS_FA, enDigits } from "@/lib/booking/fa";
 import { formatDay } from "@/lib/booking/format";
 import { todayYmd } from "@/lib/booking/time";
-import { addHolidayFn, categoriesFn, deleteBusinessFn, manageBusinessFn, removeHolidayFn, updateBusinessFn } from "@/lib/api";
+import { addHolidayFn, categoriesFn, deleteBusinessFn, manageBusinessFn, removeHolidayFn, saveShopHoursFn, shopHoursFn, updateBusinessFn } from "@/lib/api";
 
 export const Route = createFileRoute("/panel/settings")({ component: SettingsPage });
 
@@ -22,6 +24,7 @@ type Form = {
   minLeadMinutes: number;
   maxHorizonDays: number;
   slotStepMinutes: number;
+  remindHours: number;
   allowAnyStaff: boolean;
   isDemo: boolean;
   slug: string;
@@ -58,6 +61,7 @@ function SettingsPage() {
         minLeadMinutes: data.minLeadMinutes,
         maxHorizonDays: data.maxHorizonDays,
         slotStepMinutes: data.slotStepMinutes,
+        remindHours: data.remindHours ?? 1,
         allowAnyStaff: data.allowAnyStaff,
         isDemo: data.isDemo,
         slug: data.slug,
@@ -98,6 +102,7 @@ function SettingsPage() {
                 minLeadMinutes: Number(form.minLeadMinutes),
                 maxHorizonDays: Number(form.maxHorizonDays),
                 slotStepMinutes: Number(form.slotStepMinutes),
+                remindHours: Number(form.remindHours),
               },
             });
             if (!res.ok) toast.error(res.error);
@@ -107,114 +112,175 @@ function SettingsPage() {
           <Field label="نام"><TextInput value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
           <Field label="توضیح"><Area value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           <Field label="دسته">
-            <Select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
-              <option value="">بدون دسته</option>
-              {categories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-            </Select>
+            <Select
+              value={form.categoryId}
+              onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+              options={[{ value: "", label: "بدون دسته" }, ...categories.map((cat) => ({ value: cat.id, label: cat.name }))]}
+            />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="شهر"><TextInput value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
-            <Field label="تلفن"><TextInput dir="ltr" className="text-left" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
+            <Field label="تلفن"><TextInput value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
           </div>
           <Field label="آدرس"><TextInput value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
-          <Field label="منطقه زمانی" hint="زمان‌ها در پایگاه داده به وقت جهانی ذخیره می‌شوند.">
-            <Select value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })}>
-              <option value="Asia/Tehran">تهران</option>
-              <option value="Asia/Dubai">دبی</option>
-              <option value="Europe/Istanbul">استانبول</option>
-            </Select>
-          </Field>
+          <Field label="منطقه زمانی"><TextInput value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })} /></Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="حداقل فاصله تا نوبت (دقیقه)"><TextInput type="number" min={0} value={form.minLeadMinutes} onChange={(e) => setForm({ ...form, minLeadMinutes: Number(e.target.value) })} /></Field>
-            <Field label="مهلت لغو (دقیقه قبل)"><TextInput type="number" min={0} value={form.cancelBeforeMinutes} onChange={(e) => setForm({ ...form, cancelBeforeMinutes: Number(e.target.value) })} /></Field>
-            <Field label="افق رزرو (روز)"><TextInput type="number" min={1} max={180} value={form.maxHorizonDays} onChange={(e) => setForm({ ...form, maxHorizonDays: Number(e.target.value) })} /></Field>
-            <Field label="گام زمان (دقیقه)"><TextInput type="number" min={5} max={60} value={form.slotStepMinutes} onChange={(e) => setForm({ ...form, slotStepMinutes: Number(e.target.value) })} /></Field>
+            <Field label="مهلت لغو (دقیقه)"><TextInput type="number" min={0} value={form.cancelBeforeMinutes} onChange={(e) => setForm({ ...form, cancelBeforeMinutes: Number(e.target.value) })} /></Field>
+            <Field label="حداقل فاصله رزرو (دقیقه)"><TextInput type="number" min={0} value={form.minLeadMinutes} onChange={(e) => setForm({ ...form, minLeadMinutes: Number(e.target.value) })} /></Field>
+            <Field label="افق رزرو (روز)"><TextInput type="number" min={1} value={form.maxHorizonDays} onChange={(e) => setForm({ ...form, maxHorizonDays: Number(e.target.value) })} /></Field>
+            <Field label="گام نوبت (دقیقه)"><TextInput type="number" min={5} value={form.slotStepMinutes} onChange={(e) => setForm({ ...form, slotStepMinutes: Number(e.target.value) })} /></Field>
+            <Field label="یادآوری (ساعت قبل)"><TextInput type="number" min={0} value={form.remindHours} onChange={(e) => setForm({ ...form, remindHours: Number(e.target.value) })} /></Field>
           </div>
-          <label className="flex min-h-11 items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.allowAnyStaff} onChange={(e) => setForm({ ...form, allowAnyStaff: e.target.checked })} />
-            مشتری بتواند بدون انتخاب پرسنل رزرو کند
+            مشتری بتواند هر پرسنلی را انتخاب کند
           </label>
-          {form.isDemo ? <p className="text-sm text-copper">این صفحه داده نمونه است و روی فهرست عمومی برچسب نمونه دارد.</p> : null}
-          <Button type="submit">ذخیره تنظیمات</Button>
+          <Button type="submit">ذخیره</Button>
         </form>
       </Card>
-      <div className="grid content-start gap-4">
-        <Card>
-          <h2 className="text-lg font-bold">تعطیلی</h2>
-          <p className="mt-1 text-sm leading-6 text-muted">تعطیلی بدون پرسنل، کل کسب‌وکار را آن روز می‌بندد. ظرفیت لغوشده آزاد می‌ماند.</p>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <JalaliCalendar value={day} onChange={setDay} />
-            <div className="grid content-start gap-3">
-              <Field label="برای">
-                <Select value={staffId} onChange={(e) => setStaffId(e.target.value)}>
-                  <option value="">همه پرسنل</option>
-                  {staff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
-                </Select>
-              </Field>
-              <Field label="یادداشت"><TextInput value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+      <Card>
+        <h2 className="text-lg font-bold">تعطیلی</h2>
+        <p className="mt-1 text-sm text-muted">روزی که نوبت داده نمی‌شود.</p>
+        <div className="mt-4 grid gap-3">
+          <JalaliCalendar value={day} onChange={setDay} />
+          <Field label="یادداشت"><TextInput value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+          <Field label="پرسنل">
+            <Select
+              value={staffId}
+              onChange={(e) => setStaffId(e.target.value)}
+              options={[{ value: "", label: "همه" }, ...staff.map((person) => ({ value: person.id, label: person.name }))]}
+            />
+          </Field>
+          <Button
+            type="button"
+            onClick={async () => {
+              const res = await addHolidayFn({ data: { businessId, date: day, note, staffId } });
+              if (!res.ok) toast.error(res.error);
+              else {
+                setNote("");
+                load(businessId);
+              }
+            }}
+          >
+            افزودن تعطیلی
+          </Button>
+        </div>
+        <ul className="mt-4 grid gap-2">
+          {holidays.length === 0 ? <li className="text-sm text-muted">تعطیلی ثبت نشده.</li> : null}
+          {holidays.map((item) => (
+            <li key={item.id} className="flex items-center justify-between gap-2 rounded-xl bg-paper px-3 py-2 text-sm">
+              <span>{formatDay(item.date)} · {item.staffId ? staff.find((person) => person.id === item.staffId)?.name ?? "پرسنل" : "همه"} {item.note}</span>
               <Button
                 type="button"
+                variant="quiet"
                 onClick={async () => {
-                  const res = await addHolidayFn({ data: { businessId, date: day, staffId, note } });
+                  const res = await removeHolidayFn({ data: { businessId, holidayId: item.id } });
                   if (!res.ok) toast.error(res.error);
-                  else {
-                    toast.success("تعطیلی ثبت شد");
-                    setNote("");
-                    load(businessId);
-                  }
-                }}
-              >
-                ثبت تعطیلی
-              </Button>
-            </div>
-          </div>
-          <ul className="mt-4 grid gap-2">
-            {holidays.length === 0 ? <li className="text-sm text-muted">تعطیلی ثبت نشده.</li> : null}
-            {holidays.map((item) => (
-              <li key={item.id} className="flex items-center justify-between gap-2 rounded-xl bg-paper px-3 py-2 text-sm">
-                <span>{formatDay(item.date)} · {item.staffId ? staff.find((person) => person.id === item.staffId)?.name ?? "پرسنل" : "همه"} {item.note}</span>
-                <Button
-                  type="button"
-                  variant="quiet"
-                  onClick={async () => {
-                    const res = await removeHolidayFn({ data: { businessId, holidayId: item.id } });
-                    if (!res.ok) toast.error(res.error);
-                    else load(businessId);
-                  }}
-                >
-                  حذف
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </Card>
-        {owner ? (
-          <Card>
-            <h2 className="text-lg font-bold">حذف کسب‌وکار</h2>
-            <p className="mt-1 text-sm leading-6 text-muted">نوبت‌ها، خدمات و مشتریان این صفحه پاک می‌شوند. برای تأیید، نام را دقیق بنویسید.</p>
-            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <TextInput value={confirmName} onChange={(e) => setConfirmName(e.target.value)} aria-label="تأیید نام" />
-              <Button
-                type="button"
-                variant="danger"
-                disabled={confirmName.trim() !== form.name}
-                onClick={async () => {
-                  const res = await deleteBusinessFn({ data: { businessId } });
-                  if (!res.ok) {
-                    toast.error(res.error);
-                    return;
-                  }
-                  localStorage.removeItem("agent.business");
-                  toast.success("حذف شد");
-                  window.location.assign("/panel");
+                  else load(businessId);
                 }}
               >
                 حذف
               </Button>
-            </div>
-          </Card>
-        ) : null}
-      </div>
+            </li>
+          ))}
+        </ul>
+      </Card>
+      <HoursCard businessId={businessId} owner={owner} />
+      {owner ? (
+        <Card>
+          <h2 className="text-lg font-bold">حذف کسب‌وکار</h2>
+          <p className="mt-1 text-sm leading-6 text-muted">نوبت‌ها، خدمات و مشتریان این صفحه پاک می‌شوند. برای تأیید، نام را دقیق بنویسید.</p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <TextInput value={confirmName} onChange={(e) => setConfirmName(e.target.value)} aria-label="تأیید نام" />
+            <Button
+              type="button"
+              variant="danger"
+              disabled={confirmName.trim() !== form.name}
+              onClick={async () => {
+                const res = await deleteBusinessFn({ data: { businessId } });
+                if (!res.ok) {
+                  toast.error(res.error);
+                  return;
+                }
+                localStorage.removeItem("agent.business");
+                toast.success("حذف شد");
+                window.location.assign("/panel");
+              }}
+            >
+              حذف کسب‌وکار
+            </Button>
+          </div>
+        </Card>
+      ) : null}
     </div>
+  );
+}
+
+function pad(mins: number) {
+  return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`;
+}
+function toMin(value: string) {
+  const [hour, minute] = enDigits(value).split(":").map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  return hour * 60 + minute;
+}
+
+function HoursCard({ businessId, owner }: { businessId: string; owner: boolean }) {
+  const [days, setDays] = useState<{ weekday: number; enabled: boolean; start: string; end: string }[] | null>(null);
+  useEffect(() => {
+    shopHoursFn({ data: { businessId } }).then((res) => {
+      const saved = res.ok ? (res.data.hours as { weekday: number; startMin: number; endMin: number }[]) : [];
+      setDays(WEEKDAYS_FA.map((_, weekday) => {
+        const span = saved.find((item) => item.weekday === weekday);
+        const open = saved.length ? Boolean(span) : weekday !== 5;
+        return { weekday, enabled: open, start: span ? pad(span.startMin) : "09:00", end: span ? pad(span.endMin) : "21:00" };
+      }));
+    });
+  }, [businessId]);
+  if (!days) return <Card><Skeleton className="h-40" /></Card>;
+  return (
+    <Card>
+      <h2 className="text-lg font-bold">ساعت کاری</h2>
+      <p className="mt-1 text-sm leading-6 text-muted">مشتری فقط در این ساعت‌ها می‌تواند زمان تحویل را انتخاب کند. تنظیم با صاحب کسب‌وکار است.</p>
+      <div className="mt-4 grid gap-2">
+        {days.map((day) => (
+          <div key={day.weekday} className="flex flex-wrap items-center gap-2 text-sm">
+            <label className="flex w-28 items-center gap-2">
+              <input
+                type="checkbox"
+                checked={day.enabled}
+                disabled={!owner}
+                onChange={(event) => setDays(days.map((item) => item.weekday === day.weekday ? { ...item, enabled: event.target.checked } : item))}
+              />
+              {WEEKDAYS_FA[day.weekday]}
+            </label>
+            {day.enabled ? (
+              <>
+                <TextInput type="time" aria-label={`شروع ${WEEKDAYS_FA[day.weekday]}`} value={day.start} disabled={!owner} className="w-32" onChange={(event) => setDays(days.map((item) => item.weekday === day.weekday ? { ...item, start: event.target.value } : item))} />
+                <TextInput type="time" aria-label={`پایان ${WEEKDAYS_FA[day.weekday]}`} value={day.end} disabled={!owner} className="w-32" onChange={(event) => setDays(days.map((item) => item.weekday === day.weekday ? { ...item, end: event.target.value } : item))} />
+              </>
+            ) : <span className="text-muted">تعطیل</span>}
+          </div>
+        ))}
+      </div>
+      {owner ? (
+        <Button
+          type="button"
+          className="mt-4"
+          onClick={async () => {
+            const res = await saveShopHoursFn({
+              data: {
+                businessId,
+                days: days.filter((day) => day.enabled).map((day) => ({ weekday: day.weekday, startMin: toMin(day.start), endMin: toMin(day.end) })),
+              },
+            });
+            if (!res.ok) toast.error(res.error);
+            else toast.success("ساعت کاری ذخیره شد");
+          }}
+        >
+          ذخیره ساعت کاری
+        </Button>
+      ) : null}
+    </Card>
   );
 }

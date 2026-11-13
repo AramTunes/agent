@@ -85,10 +85,15 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 			}
 		}
 		fulfill = day + " " + clock
+		if err := s.checkDelivery(b.ID, day, clock, loc); err != nil {
+			return nil, err
+		}
 	}
 	stored := make([]map[string]any, 0, len(lines))
+	variants := make([]string, 0, len(lines))
 	total := 0
-	currency := "toman"
+	currency := ""
+	priced := true
 	var firstID string
 	for _, line := range lines {
 		item, variant, err := findMenuItem(b.PageBlocks, line.itemID, line.variantID)
@@ -97,12 +102,31 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 		}
 		if firstID == "" {
 			firstID = item.ID
-			currency = item.Currency
 		}
-		total += item.Price * line.qty
+		amount, sure := definiteLine(item.PriceType, item.Price, line.qty)
+		if !sure {
+			priced = false
+		} else if currency == "" {
+			currency = item.Currency
+			total += amount
+		} else if item.Currency != currency {
+			priced = false
+		} else {
+			total += amount
+		}
 		stored = append(stored, map[string]any{
-			"itemId": item.ID, "title": item.Title, "variant": variant, "qty": line.qty, "price": item.Price,
+			"itemId": item.ID, "title": item.Title, "variant": variant, "qty": line.qty,
+			"price": item.Price, "priceTo": item.PriceTo, "priceType": item.PriceType, "currency": item.Currency,
 		})
+		if variant != "" {
+			variants = append(variants, variant)
+		}
+	}
+	if !priced {
+		total = 0
+	}
+	if currency == "" {
+		currency = "toman"
 	}
 	payload, err := json.Marshal(stored)
 	if err != nil {
@@ -116,17 +140,31 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 		summary = clip(summary, 40) + " و " + strconv.Itoa(len(stored)-1) + " مورد دیگر"
 	}
 	id := newID()
+	token := newID()
 	now := s.now().UTC().Format(time.RFC3339)
-	if _, err := s.db.Exec(`INSERT INTO menu_orders (id, business_id, item_id, item_title, variant_title, price, currency, customer_name, phone, email, when_kind, fulfill_at, note, status, created_at, address, lines) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?)`,
-		id, b.ID, firstID, clip(summary, 80), "", total, currency, name, phone, email, when, fulfill, note, now, address, string(payload)); err != nil {
+	customerID, err := s.customerManual(s.db, b.ID, name, phone)
+	if err != nil {
+		return nil, err
+	}
+	if address != "" {
+		_, _ = s.db.Exec(`UPDATE customers SET address = ? WHERE id = ? AND address = ''`, address, customerID)
+	}
+	if _, err := s.db.Exec(`INSERT INTO menu_orders (id, business_id, item_id, item_title, variant_title, price, currency, customer_name, phone, email, when_kind, fulfill_at, note, status, created_at, address, lines, priced, customer_id, receipt_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)`,
+		id, b.ID, firstID, clip(summary, 80), clip(strings.Join(variants, "، "), 120), total, currency, name, phone, email, when, fulfill, note, now, address, string(payload), bint(priced), customerID, token); err != nil {
 		return nil, err
 	}
 	whenText := "هرچه زودتر"
 	if when == "later" {
 		whenText = fulfill
 	}
-	s.notify(s.db, s.memberIDs(s.db, b.ID), b.ID, id, "menu_order", "سفارش جدید منو", name+" · "+clip(summary, 80)+" · "+whenText)
-	return map[string]any{"id": id}, nil
+	body := name + "\nتلفن: " + phone + "\nآدرس: " + address + "\n" + clip(summary, 80) + "\n" + whenText
+	if note != "" {
+		body += "\nیادداشت: " + note
+	}
+	s.notify(s.db, s.orderWatchers(s.db, b.ID), b.ID, id, "menu_order", "سفارش جدید", body)
+	link := receiptLink(safeOrigin(mustString(raw, "origin")), token)
+	s.queueSMS(phone, customerReceiptText("order", link), id)
+	return map[string]any{"id": id, "receiptToken": token}, nil
 }
 
 type orderLine struct {
@@ -175,8 +213,8 @@ func orderLines(raw map[string]any) ([]orderLine, error) {
 }
 
 type menuHit struct {
-	ID, Title, Currency string
-	Price               int
+	ID, Title, Currency, PriceType string
+	Price, PriceTo                 int
 }
 
 func findMenuItem(raw, itemID, variantID string) (menuHit, string, error) {
@@ -190,6 +228,7 @@ func findMenuItem(raw, itemID, variantID string) (menuHit, string, error) {
 			Title     string `json:"title"`
 			Status    string `json:"status"`
 			Price     int    `json:"price"`
+			PriceTo   int    `json:"priceTo"`
 			PriceType string `json:"priceType"`
 			Variants  []struct {
 				ID     string `json:"id"`
@@ -205,7 +244,7 @@ func findMenuItem(raw, itemID, variantID string) (menuHit, string, error) {
 	itemID = strings.TrimSpace(itemID)
 	variantID = strings.TrimSpace(variantID)
 	for _, block := range blocks {
-		if block.Type != "menu" || (block.Active != nil && !*block.Active) {
+		if (block.Type != "menu" && block.Type != "products" && block.Type != "services") || (block.Active != nil && !*block.Active) {
 			continue
 		}
 		for _, item := range block.Items {
@@ -242,8 +281,300 @@ func findMenuItem(raw, itemID, variantID string) (menuHit, string, error) {
 			if currency == "" {
 				currency = "toman"
 			}
-			return menuHit{ID: item.ID, Title: item.Title, Price: price, Currency: currency}, label, nil
+			return menuHit{ID: item.ID, Title: item.Title, Price: price, PriceTo: item.PriceTo, PriceType: menuPriceType(item.PriceType), Currency: currency}, label, nil
 		}
 	}
 	return menuHit{}, "", fail(404, "NOT_FOUND", "این مورد در منو نیست")
+}
+
+func definiteLine(priceType string, price, qty int) (int, bool) {
+	if qty < 1 {
+		qty = 1
+	}
+	switch priceType {
+	case "", "fixed":
+		if price < 0 {
+			price = 0
+		}
+		return price * qty, true
+	case "free":
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func (s *Service) ListOrders(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, _ := textOf(raw, "businessId", 80, "")
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.Query(`
+		SELECT id, customer_name, phone, address, note, status, when_kind, fulfill_at, created_at, price, currency, priced, lines
+		FROM menu_orders WHERE business_id = ? ORDER BY created_at DESC LIMIT 100`, businessID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, name, phone, address, note, status, whenKind, fulfill, created, currency, lines string
+		var price, priced int
+		if err := rows.Scan(&id, &name, &phone, &address, &note, &status, &whenKind, &fulfill, &created, &price, &currency, &priced, &lines); err != nil {
+			return nil, err
+		}
+		var parsed any
+		_ = json.Unmarshal([]byte(lines), &parsed)
+		if parsed == nil {
+			parsed = []any{}
+		}
+		out = append(out, map[string]any{
+			"id": id, "name": name, "phone": phone, "address": address, "note": note, "status": status,
+			"whenKind": whenKind, "fulfillAt": fulfill, "createdAt": created,
+			"price": price, "currency": currency, "priced": priced != 0, "lines": parsed,
+		})
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) SetOrderStatus(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, _ := textOf(raw, "businessId", 80, "")
+	orderID, err := textOf(raw, "id", 80, "")
+	if err != nil || orderID == "" {
+		return nil, fail(400, "VALIDATION", "سفارش پیدا نشد")
+	}
+	status, err := textOf(raw, "status", 20, "")
+	if err != nil || !orderStatus(status) {
+		return nil, fail(400, "VALIDATION", "وضعیت سفارش معتبر نیست")
+	}
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
+		return nil, err
+	}
+	res, err := s.db.Exec(`UPDATE menu_orders SET status = ? WHERE id = ? AND business_id = ?`, status, orderID, businessID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fail(404, "NOT_FOUND", "سفارش پیدا نشد")
+	}
+	return map[string]any{"id": orderID, "status": status}, nil
+}
+
+func orderStatus(value string) bool {
+	switch value {
+	case "new", "preparing", "ready", "delivered", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) shopHours(q querier, businessID string) []map[string]any {
+	rows, err := q.Query(`SELECT weekday, start_min, end_min FROM shop_hours WHERE business_id = ? ORDER BY weekday, start_min`, businessID)
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var weekday, start, end int
+		if rows.Scan(&weekday, &start, &end) != nil {
+			continue
+		}
+		out = append(out, map[string]any{"weekday": weekday, "startMin": start, "endMin": end})
+	}
+	return out
+}
+
+func (s *Service) ShopHours(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, err := textOf(raw, "businessId", 80, "")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
+		return nil, err
+	}
+	var zone string
+	_ = s.db.QueryRow(`SELECT timezone FROM businesses WHERE id = ?`, businessID).Scan(&zone)
+	if zone == "" {
+		zone = "Asia/Tehran"
+	}
+	return map[string]any{"hours": s.shopHours(s.db, businessID), "timezone": zone}, nil
+}
+
+func (s *Service) SaveShopHours(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, err := textOf(raw, "businessId", 80, "")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.requireRole(s.db, userID, businessID, "owner"); err != nil {
+		return nil, err
+	}
+	days, _ := raw["days"].([]any)
+	if len(days) > 14 {
+		return nil, fail(400, "VALIDATION", "بازه‌های ساعت کاری زیاد است")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM shop_hours WHERE business_id = ?`, businessID); err != nil {
+		return nil, err
+	}
+	for _, rawDay := range days {
+		day, ok := rawDay.(map[string]any)
+		if !ok {
+			return nil, fail(400, "VALIDATION", "درخواست نامعتبر است")
+		}
+		weekday, err := intOf(day, "weekday", 0, 6)
+		if err != nil {
+			return nil, err
+		}
+		startMin, err := intOf(day, "startMin", 0, 1439)
+		if err != nil {
+			return nil, err
+		}
+		endMin, err := intOf(day, "endMin", 1, 1440)
+		if err != nil {
+			return nil, err
+		}
+		if endMin <= startMin {
+			return nil, fail(400, "VALIDATION", "ساعت پایان باید بعد از شروع باشد")
+		}
+		if _, err := tx.Exec(`INSERT INTO shop_hours (business_id, weekday, start_min, end_min) VALUES (?,?,?,?)`, businessID, weekday, startMin, endMin); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return map[string]any{"hours": s.shopHours(s.db, businessID)}, nil
+}
+
+func (s *Service) SetOrderWhen(userID string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	businessID, err := textOf(raw, "businessId", 80, "")
+	if err != nil {
+		return nil, err
+	}
+	orderID, err := textOf(raw, "id", 80, "")
+	if err != nil || orderID == "" {
+		return nil, fail(400, "VALIDATION", "سفارش پیدا نشد")
+	}
+	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
+		return nil, err
+	}
+	var zone string
+	if err := s.db.QueryRow(`SELECT timezone FROM businesses WHERE id = ?`, businessID).Scan(&zone); err != nil {
+		return nil, fail(404, "NOT_FOUND", "کسب‌وکار پیدا نشد")
+	}
+	when := mustString(raw, "when")
+	if when != "later" {
+		when = "now"
+	}
+	fulfill := ""
+	if when == "later" {
+		day := strings.TrimSpace(mustString(raw, "date"))
+		clock := strings.TrimSpace(mustString(raw, "time"))
+		if !dayRe.MatchString(day) || !clockRe.MatchString(clock) {
+			return nil, fail(400, "VALIDATION", "تاریخ و ساعت را مشخص کنید")
+		}
+		loc := mustZone(zone)
+		today := booking.TodayYMD(loc, s.now())
+		if day < today {
+			return nil, fail(400, "VALIDATION", "این تاریخ گذشته است")
+		}
+		if day == today {
+			now := s.now().In(loc)
+			hour := int(clock[0]-'0')*10 + int(clock[1]-'0')
+			min := int(clock[3]-'0')*10 + int(clock[4]-'0')
+			if hour*60+min < now.Hour()*60+now.Minute() {
+				return nil, fail(400, "VALIDATION", "این ساعت گذشته است")
+			}
+		}
+		if err := s.checkDelivery(businessID, day, clock, loc); err != nil {
+			return nil, err
+		}
+		fulfill = day + " " + clock
+	}
+	res, err := s.db.Exec(`UPDATE menu_orders SET when_kind = ?, fulfill_at = ? WHERE id = ? AND business_id = ?`, when, fulfill, orderID, businessID)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, fail(404, "NOT_FOUND", "سفارش پیدا نشد")
+	}
+	return map[string]any{"id": orderID, "whenKind": when, "fulfillAt": fulfill}, nil
+}
+
+func (s *Service) checkDelivery(businessID, day, clock string, loc *time.Location) error {
+	minute := int(clock[0]-'0')*600 + int(clock[1]-'0')*60 + int(clock[3]-'0')*10 + int(clock[4]-'0')
+	when, err := time.ParseInLocation("2006-01-02", day, loc)
+	if err != nil {
+		return fail(400, "VALIDATION", "تاریخ و ساعت را مشخص کنید")
+	}
+	rows, err := s.db.Query(`SELECT weekday, start_min, end_min FROM shop_hours WHERE business_id = ?`, businessID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	seen := false
+	open := false
+	weekday := int(when.Weekday())
+	for rows.Next() {
+		var wd, start, end int
+		if rows.Scan(&wd, &start, &end) != nil {
+			continue
+		}
+		seen = true
+		if wd == weekday && minute >= start && minute < end {
+			open = true
+		}
+	}
+	if !seen {
+		return fail(400, "VALIDATION", "ساعت کاری هنوز تنظیم نشده")
+	}
+	if !open {
+		return fail(400, "VALIDATION", "این ساعت خارج از ساعت کاری است")
+	}
+	return nil
+}
+
+func (s *Service) orderWatchers(q querier, businessID string) []string {
+	rows, err := q.Query(`SELECT user_id FROM memberships WHERE business_id = ? AND role IN ('owner','manager','staff') AND user_id <> ''`, businessID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	seen := map[string]bool{}
+	for rows.Next() {
+		var id string
+		_ = rows.Scan(&id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func minuteOpen(spans [][2]int, minute int) bool {
+	for _, span := range spans {
+		if minute >= span[0] && minute < span[1] {
+			return true
+		}
+	}
+	return false
 }

@@ -293,6 +293,37 @@ CREATE TABLE IF NOT EXISTS page_block_views (
   views INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (business_id, day, block_id)
 );
+CREATE TABLE IF NOT EXISTS support_tickets (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  code TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS support_messages (
+  id TEXT PRIMARY KEY,
+  ticket_id TEXT NOT NULL,
+  author TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS support_tickets_user_idx ON support_tickets (user_id, updated_at);
+CREATE TABLE IF NOT EXISTS customer_notes (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  customer_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS shop_hours (
+  business_id TEXT NOT NULL,
+  weekday INTEGER NOT NULL,
+  start_min INTEGER NOT NULL,
+  end_min INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS shop_hours_biz_idx ON shop_hours (business_id, weekday);
 `
 
 func Open(path string) (*sql.DB, error) {
@@ -324,8 +355,26 @@ func Open(path string) (*sql.DB, error) {
 		`ALTER TABLE staff ADD COLUMN invite_token TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE menu_orders ADD COLUMN address TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE menu_orders ADD COLUMN lines TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE menu_orders ADD COLUMN priced INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE menu_orders ADD COLUMN customer_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE menu_orders ADD COLUMN receipt_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE bookings ADD COLUMN receipt_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE services ADD COLUMN photo TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE bookings ADD COLUMN reminded_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE businesses ADD COLUMN remind_hours INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE bookings ADD COLUMN customer_name TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE bookings ADD COLUMN customer_phone TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, err
+		}
+	}
+	for _, stmt := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS menu_orders_receipt_uq ON menu_orders (receipt_token) WHERE receipt_token <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS bookings_receipt_uq ON bookings (receipt_token) WHERE receipt_token <> ''`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
 			db.Close()
 			return nil, err
 		}

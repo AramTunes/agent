@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react";
-import { Navigate } from "@tanstack/react-router";
+import { Navigate, useRouterState } from "@tanstack/react-router";
 import { GROK_PROVIDERS, authEnabled, signIn, signOut } from "./client";
 import { hasGateSessionMarker } from "./gate-session-marker";
 import { resolveSignInGateState } from "./sign-in-gate";
@@ -46,7 +46,22 @@ export function SignedOut({ children }: { children: ReactNode }) {
  * render this.
  */
 export function RedirectToSignIn({ to = SIGN_IN_PATH }: { to?: string }) {
-  return <Navigate to={to} />;
+  const href = useRouterState({ select: (state) => state.location.href });
+  return <Navigate to={to} search={{ next: safeNext(href) }} />;
+}
+
+function safeNext(href: string) {
+  let path = href;
+  if (href.startsWith("http")) {
+    try {
+      const url = new URL(href);
+      path = url.pathname + url.search;
+    } catch {
+      return "/panel";
+    }
+  }
+  if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/auth") || path.startsWith("/login")) return "/panel";
+  return path;
 }
 
 export function SignInGate({

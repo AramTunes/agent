@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Badge, Button, Card, Field, Area, Select, Skeleton, TextInput } from "@/components/ui";
+import { Badge, Button, Card, Field, Area, Skeleton, TextInput } from "@/components/ui";
+import { Select } from "@/components/ui/select";
 import { adminBusinessesFn, moderateBusinessFn } from "@/lib/api";
 import { PageMark } from "@/lib/page-avatar";
 
@@ -70,11 +71,15 @@ function BusinessesPage() {
             </div>
             <div className="mt-3 grid gap-2 sm:grid-cols-[12rem_1fr_auto]">
               <Field label="وضعیت">
-                <Select value={item.status} onChange={(e) => setDraft({ ...draft, [row.id]: { ...item, status: e.target.value } })}>
-                  <option value="active">فعال</option>
-                  <option value="inactive">غیرفعال</option>
-                  <option value="suspended">تعلیق</option>
-                </Select>
+                <Select
+                  value={item.status}
+                  onChange={(e) => setDraft({ ...draft, [row.id]: { ...item, status: e.target.value } })}
+                  options={[
+                    { value: "active", label: "فعال" },
+                    { value: "inactive", label: "غیرفعال" },
+                    { value: "suspended", label: "تعلیق" },
+                  ]}
+                />
               </Field>
               <Field label="دلیل، اگر فعال نیست">
                 <Area value={item.reason} onChange={(e) => setDraft({ ...draft, [row.id]: { ...item, reason: e.target.value } })} />

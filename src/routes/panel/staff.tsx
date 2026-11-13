@@ -1,10 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { ImagePlus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
-import { Badge, Button, Card, Empty, Field, MobileInput, Skeleton, TextInput } from "@/components/ui";
+import { Badge, Button, Card, Empty, Field, Skeleton, TextInput } from "@/components/ui";
+import { PhoneInput } from "@/components/phone-input";
 import { WEEKDAYS_FA, clockLabel, enDigits } from "@/lib/booking/fa";
-import { manageBusinessFn, saveScheduleFn, saveStaffFn } from "@/lib/api";
+import { fitImage } from "@/lib/fit-image";
+import { deleteStaffFn, manageBusinessFn, saveScheduleFn, saveStaffFn } from "@/lib/api";
 
 export const Route = createFileRoute("/panel/staff")({ component: StaffPage });
 
@@ -17,6 +20,7 @@ type Staff = {
   pending?: boolean;
   inviteToken?: string;
   active: boolean;
+  photo?: string;
   serviceIds: string[];
   weekly: { weekday: number; startMin: number; endMin: number }[];
   breaks: { weekday: number; startMin: number; endMin: number }[];
@@ -24,8 +28,7 @@ type Staff = {
 type Day = {
   weekday: number;
   enabled: boolean;
-  start: string;
-  end: string;
+  ranges: { start: string; end: string }[];
   breakStart: string;
   breakEnd: string;
 };
@@ -42,14 +45,13 @@ function toMin(value: string) {
 }
 function daysOf(person: Staff | null): Day[] {
   return WEEKDAYS_FA.map((_, weekday) => {
-    const window = person?.weekly.find((item) => item.weekday === weekday);
+    const windows = person?.weekly.filter((item) => item.weekday === weekday) ?? [];
     const rest = person?.breaks.find((item) => item.weekday === weekday);
-    const enabled = person ? Boolean(window) : weekday !== 5;
+    const enabled = person ? windows.length > 0 : weekday !== 5;
     return {
       weekday,
       enabled,
-      start: pad(window?.startMin ?? 540),
-      end: pad(window?.endMin ?? 1080),
+      ranges: windows.length ? windows.map((item) => ({ start: pad(item.startMin), end: pad(item.endMin) })) : [{ start: "09:00", end: "18:00" }],
       breakStart: rest ? pad(rest.startMin) : "",
       breakEnd: rest ? pad(rest.endMin) : "",
     };
@@ -65,6 +67,7 @@ function StaffPage() {
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [phone, setPhone] = useState("");
+  const [photo, setPhoto] = useState("");
   const [active, setActive] = useState(true);
   const [id, setId] = useState("");
   const [serviceIds, setServiceIds] = useState<string[]>([]);
@@ -101,6 +104,7 @@ function StaffPage() {
     setName(person.name);
     setTitle(person.title);
     setPhone(person.phone || "");
+    setPhoto(person.photo || "");
     setActive(person.active);
     setServiceIds(person.serviceIds);
     setDays(daysOf(person));
@@ -110,6 +114,7 @@ function StaffPage() {
     setId("");
     setName("");
     setPhone("");
+    setPhoto("");
     setTitle("");
     setActive(true);
     setServiceIds(services.filter((item) => item.active).map((item) => item.id));
@@ -131,7 +136,10 @@ function StaffPage() {
         {staff.map((person) => (
           <button key={person.id} type="button" onClick={() => edit(person)} className={`rounded-xl border p-3 text-start ${person.id === id ? "border-jade bg-jade-soft" : "border-line bg-card"}`}>
             <div className="flex items-center justify-between gap-2">
-              <span className="font-semibold">{person.name}</span>
+              <span className="flex min-w-0 items-center gap-2 font-semibold">
+                {person.photo ? <img src={person.photo} alt="" className="size-8 shrink-0 rounded-full object-cover" /> : null}
+                <span className="truncate">{person.name}</span>
+              </span>
               {!person.active ? <Badge tone="muted">غیرفعال</Badge> : null}
             </div>
             <p className="text-sm text-muted">{person.title || "بدون عنوان"}{person.pending ? " · در انتظار تأیید" : ""}</p>
@@ -151,7 +159,7 @@ function StaffPage() {
             }
             setSaving(true);
             const saved = await saveStaffFn({
-              data: { businessId, ...(id ? { id } : {}), name, title, phone, active, serviceIds },
+              data: { businessId, ...(id ? { id } : {}), name, title, phone, photo, active, serviceIds },
             });
             if (!saved.ok) {
               setSaving(false);
@@ -165,8 +173,7 @@ function StaffPage() {
                 days: days.map((day) => ({
                   weekday: day.weekday,
                   enabled: day.enabled,
-                  startMin: toMin(day.start),
-                  endMin: toMin(day.end),
+                  ranges: day.enabled ? day.ranges.map((range) => ({ startMin: toMin(range.start), endMin: toMin(range.end) })) : [],
                   breakStart: day.breakStart ? toMin(day.breakStart) : "",
                   breakEnd: day.breakEnd ? toMin(day.breakEnd) : "",
                 })),
@@ -185,12 +192,13 @@ function StaffPage() {
             load(businessId);
           }}
         >
+          <PhotoField value={photo} onChange={setPhoto} />
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="نام"><TextInput value={name} onChange={(e) => setName(e.target.value)} required minLength={2} /></Field>
             <Field label="عنوان"><TextInput value={title} onChange={(e) => setTitle(e.target.value)} placeholder="مثلاً استایلیست" /></Field>
           </div>
           <Field label="شماره موبایل">
-            <MobileInput value={phone} onChange={setPhone} />
+            <PhoneInput value={phone} onChange={setPhone} />
           </Field>
           <fieldset>
             <legend className="mb-2 text-sm font-medium">خدمات</legend>
@@ -228,9 +236,17 @@ function StaffPage() {
                 </label>
                 <label className="grid gap-1 text-xs text-muted">
                   شروع تا پایان
-                  <span className="flex gap-1">
-                    <TextInput dir="ltr" className="px-2 text-left" disabled={!day.enabled} value={day.start} onChange={(e) => setDays(days.map((item, i) => (i === index ? { ...item, start: e.target.value } : item)))} />
-                    <TextInput dir="ltr" className="px-2 text-left" disabled={!day.enabled} value={day.end} onChange={(e) => setDays(days.map((item, i) => (i === index ? { ...item, end: e.target.value } : item)))} />
+                  <span className="grid gap-1">
+                    {day.ranges.map((range, rangeIndex) => (
+                      <span key={rangeIndex} className="flex gap-1">
+                        <TextInput dir="ltr" className="px-2 text-left" disabled={!day.enabled} value={range.start} onChange={(e) => setDays(days.map((item, i) => (i === index ? { ...item, ranges: item.ranges.map((row, n) => (n === rangeIndex ? { ...row, start: e.target.value } : row)) } : item)))} />
+                        <TextInput dir="ltr" className="px-2 text-left" disabled={!day.enabled} value={range.end} onChange={(e) => setDays(days.map((item, i) => (i === index ? { ...item, ranges: item.ranges.map((row, n) => (n === rangeIndex ? { ...row, end: e.target.value } : row)) } : item)))} />
+                        {day.ranges.length > 1 ? (
+                          <button type="button" className="text-xs text-muted" disabled={!day.enabled} onClick={() => setDays(days.map((item, i) => (i === index ? { ...item, ranges: item.ranges.filter((_, n) => n !== rangeIndex) } : item)))}>حذف</button>
+                        ) : null}
+                      </span>
+                    ))}
+                    <button type="button" className="text-start text-xs font-semibold text-jade" disabled={!day.enabled} onClick={() => setDays(days.map((item, i) => (i === index ? { ...item, ranges: [...item.ranges, { start: "09:00", end: "18:00" }] } : item)))}>بازه دیگر</button>
                   </span>
                 </label>
                 <label className="grid gap-1 text-xs text-muted">
@@ -248,7 +264,31 @@ function StaffPage() {
               برنامه فعلی: {selected.weekly.map((item) => `${WEEKDAYS_FA[item.weekday]} ${clockLabel(item.startMin)}–${clockLabel(item.endMin)}`).join("، ") || "بدون ساعت"}
             </p>
           ) : null}
-          <Button type="submit" disabled={saving}>{saving ? "در حال ذخیره" : "ذخیره پرسنل"}</Button>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={saving}>{saving ? "در حال ذخیره" : "ذخیره پرسنل"}</Button>
+            {id ? (
+              <Button
+                type="button"
+                variant="danger"
+                disabled={saving}
+                onClick={async () => {
+                  setSaving(true);
+                  const res = await deleteStaffFn({ data: { businessId, id } });
+                  setSaving(false);
+                  if (!res.ok) {
+                    toast.error(res.error);
+                    return;
+                  }
+                  toast.success("پرسنل حذف شد");
+                  reset();
+                  setInvite("");
+                  load(businessId);
+                }}
+              >
+                حذف
+              </Button>
+            ) : null}
+          </div>
           {invite ? (
             <p className="rounded-xl bg-paper px-3 py-2 text-sm leading-6">
               پیامک وصل نیست. این لینک برای پرسنل است تا نامش را تأیید کند و با کد وارد شود:
@@ -258,5 +298,39 @@ function StaffPage() {
         </form>
       </Card>
     </div>
+  );
+}
+
+function PhotoField({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <Field label="عکس" hint="دلخواه">
+      <input
+        ref={input}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (!file) return;
+          void fitImage(file, 480).then(onChange).catch(() => toast.error("این تصویر باز نشد"));
+        }}
+      />
+      {value ? (
+        <div className="relative h-24 w-24 overflow-hidden rounded-full">
+          <img src={value} alt="" className="size-full object-cover" />
+          <div className="absolute inset-x-0 bottom-0 flex justify-between bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
+            <button type="button" onClick={() => input.current?.click()}>ویرایش</button>
+            <button type="button" onClick={() => onChange("")}>حذف</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={() => input.current?.click()} className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-full border border-dashed border-line bg-card text-xs font-semibold">
+          <ImagePlus className="size-4" />
+          عکس
+        </button>
+      )}
+    </Field>
   );
 }

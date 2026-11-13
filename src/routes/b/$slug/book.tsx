@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { JalaliCalendar } from "@/components/jalali-calendar";
 import { Shell } from "@/components/shell";
 import { Badge, Button, Card, Empty, ErrorNote, Field, Skeleton, Stepper, TextInput } from "@/components/ui";
+import { PhoneInput } from "@/components/phone-input";
 import { useCurrentUserState } from "@/lib/session";
 import { minutesLabel, toman } from "@/lib/booking/fa";
 import { isIranMobile, normalizeIranMobile } from "@/lib/iran-phone";
@@ -35,8 +36,23 @@ type Biz = {
   phone?: string;
   pageBlocks?: { type?: string; title?: string; active?: boolean }[];
   services: Service[];
-  staff: { id: string; name: string; title: string; serviceIds: string[] }[];
+  staff: { id: string; name: string; title: string; serviceIds: string[]; weekly?: { weekday: number; startMin: number; endMin: number }[] }[];
+  holidays?: { date: string; staffId?: string | null }[];
 };
+
+function closedFor(
+  day: string,
+  people: { id: string; weekly?: { weekday: number; startMin: number; endMin: number }[] }[],
+  holidays: { date: string; staffId?: string | null }[],
+) {
+  if (people.length === 0) return false;
+  const weekday = new Date(`${day}T12:00:00Z`).getUTCDay();
+  if (holidays.some((item) => item.date === day && !item.staffId)) return true;
+  return !people.some((person) => {
+    if (holidays.some((item) => item.date === day && item.staffId === person.id)) return false;
+    return (person.weekly ?? []).some((span) => span.weekday === weekday && span.endMin > span.startMin);
+  });
+}
 
 function localDay(iso: string, zone: string) {
   const c = civilInZone(new Date(iso), zone || "Asia/Tehran");
@@ -60,6 +76,8 @@ type Receipt = {
   serviceName?: string;
   staffName?: string;
   status?: string;
+  customerNote?: string;
+  receiptToken?: string;
 };
 
 function BookPage() {
@@ -231,6 +249,7 @@ export function BookingScreen({ slug }: { slug: string }) {
             <div className="flex justify-between gap-3"><dt className="text-muted">شماره‌ت</dt><dd dir="ltr">{receipt.customerPhone || "ثبت نشده"}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">ایمیل</dt><dd dir="ltr">{receipt.customerEmail?.trim() || "ندارد"}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">یادداشت برای کسب‌وکار</dt><dd className="text-end">{receipt.note?.trim() || "ندارد"}</dd></div>
+            {receipt.customerNote ? <div className="flex justify-between gap-3"><dt className="text-muted">پیام کسب‌وکار</dt><dd className="text-end">{receipt.customerNote}</dd></div> : null}
             <div className="flex justify-between gap-3"><dt className="text-muted">روز</dt><dd>{receipt.startsAt ? formatDay(localDay(receipt.startsAt, biz.timezone)) : ""}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">ساعت</dt><dd>{receipt.startsAt ? formatClock(receipt.startsAt, biz.timezone) : ""}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">خدمت</dt><dd>{receipt.serviceName}</dd></div>
@@ -238,7 +257,10 @@ export function BookingScreen({ slug }: { slug: string }) {
             <div className="flex justify-between gap-3"><dt className="text-muted">آدرس ما</dt><dd className="text-end">{biz.address?.trim() || "ثبت نشده"}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">شماره ما</dt><dd dir="ltr">{biz.phone?.trim() || "ثبت نشده"}</dd></div>
           </dl>
-          <p className="mt-4 text-sm leading-7 text-muted">اگر سوالی داشتی با شماره بالا تماس بگیر.</p>
+          {receipt.status !== "cancelled" ? (
+            <p className="mt-4 text-sm leading-7 text-muted">نوبتتون ثبت شد. جزئیاتش رو می‌تونید از لینک زیر ببینید. همین پیام برای شماره شما هم ارسال شد.</p>
+          ) : null}
+          {receipt.status !== "cancelled" && receipt.receiptToken ? <a href={`${window.location.origin}/r/${receipt.receiptToken}`} className="mt-2 block break-all text-sm font-semibold text-jade">{`${window.location.origin}/r/${receipt.receiptToken}`}</a> : null}
           {receipt.status !== "cancelled" ? (
             <div className="mt-5 border-t border-line pt-4">
               <p className="text-sm leading-7">اگر می‌خواهی نوبتت را لغو کنی، از فرم زیر استفاده کن.</p>
@@ -292,7 +314,7 @@ export function BookingScreen({ slug }: { slug: string }) {
           ) : null}
           {step === 2 ? (
             <div className="grid gap-3">
-              <JalaliCalendar value={day || min} onChange={setDay} min={min} max={max} />
+              <JalaliCalendar value={day || min} onChange={setDay} min={min} max={max} disabledDay={(ymd) => closedFor(ymd, staffChoices, biz.holidays ?? [])} />
               <Card>
                 <h2 className="font-bold">زمان {day ? formatDay(day) : ""}</h2>
                 {slotLoading ? <Skeleton className="mt-3 h-16" /> : null}
@@ -329,7 +351,7 @@ export function BookingScreen({ slug }: { slug: string }) {
               </div>
               <div className="mt-3">
                 <Field label="شماره">
-                  <TextInput dir="ltr" className="text-left" inputMode="tel" value={phone} maxLength={15} placeholder="۰۹۱۲xxxxxxx" onChange={(event) => setPhone(event.target.value)} />
+                  <PhoneInput value={phone} onChange={setPhone} />
                 </Field>
               </div>
               <div className="mt-3">
@@ -366,8 +388,8 @@ export function BookingScreen({ slug }: { slug: string }) {
                       toast.error("یک خدمت انتخاب کنید");
                       return;
                     }
-                    if (step === 1 && staffId === null && !biz.allowAnyStaff && staffChoices.length === 0) {
-                      toast.error("پرسنلی برای این خدمت نیست");
+                    if (step === 1 && staffId === null && !biz.allowAnyStaff) {
+                      toast.error(staffChoices.length === 0 ? "پرسنلی برای این خدمت نیست" : "یک پرسنل انتخاب کنید");
                       return;
                     }
                     if (step === 2 && !start) {

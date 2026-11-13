@@ -29,7 +29,7 @@ export function DualSpark({
   secondaryColor: string;
 }) {
   const a = curve(primary, 300, 72);
-  const b = curve(secondary, 300, 72);
+  const b = secondary.length > 0 ? curve(secondary, 300, 72) : null;
   const id = `${primaryColor}-${secondaryColor}`.replace(/[^a-z0-9]/gi, "");
   return (
     <svg viewBox="0 0 300 72" className="mt-2 h-16 w-full" preserveAspectRatio="none" aria-hidden="true">
@@ -43,9 +43,9 @@ export function DualSpark({
           <stop offset="100%" stopColor={secondaryColor} stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={b.area} fill={`url(#${id}-b)`} />
+      {b ? <path d={b.area} fill={`url(#${id}-b)`} /> : null}
       <path d={a.area} fill={`url(#${id}-a)`} />
-      <path d={b.line} fill="none" stroke={secondaryColor} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      {b ? <path d={b.line} fill="none" stroke={secondaryColor} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" /> : null}
       <path d={a.line} fill="none" stroke={primaryColor} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );

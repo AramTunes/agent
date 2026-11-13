@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Calendar } from "lucide-react";
 import { CustomerGroupField, type CustomGroup } from "@/components/customer-group";
 import { JalaliCalendar } from "@/components/jalali-calendar";
-import { Area, Field, MobileInput, TextInput } from "@/components/ui";
+import { Area, Field, TextInput } from "@/components/ui";
+import { PhoneInput } from "@/components/phone-input";
 import { Combobox } from "@/components/ui/combobox";
 import { faNum } from "@/lib/booking/fa";
 import { gregorianToJalali } from "@/lib/booking/jalali";
@@ -63,7 +64,7 @@ export function CustomerFields({
         <Field label="نام"><TextInput value={draft.firstName} onChange={(event) => onChange({ ...draft, firstName: event.target.value })} required minLength={2} /></Field>
         <Field label="نام خانوادگی"><TextInput value={draft.lastName} onChange={(event) => onChange({ ...draft, lastName: event.target.value })} /></Field>
       </div>
-      <Field label="شماره موبایل"><MobileInput value={draft.phone} onChange={(value) => onChange({ ...draft, phone: value })} /></Field>
+      <Field label="شماره موبایل"><PhoneInput value={draft.phone} onChange={(value) => onChange({ ...draft, phone: value })} /></Field>
       <Field label="تاریخ تولد" hint="اختیاری">
         <button type="button" className="inline-flex h-11 w-full items-center gap-2 rounded-xl border border-line bg-card px-3 text-sm" onClick={() => setBirthOpen((open) => !open)}>
           <Calendar className="size-4 shrink-0 text-muted" />

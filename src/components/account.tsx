@@ -27,6 +27,7 @@ export type Me = {
     pageName: string;
     activityName: string;
     avatar: string;
+    hasPassword?: boolean;
   };
   isAdmin: boolean;
   canClaim: boolean;

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -54,7 +55,7 @@ func TestSignupAndBooking(t *testing.T) {
 	}
 	serviceID := saved.(map[string]any)["serviceId"].(string)
 	staffed, err := svc.SaveStaff(userID, map[string]any{
-		"businessId": biz, "name": "نگار", "title": "آرایشگر", "serviceIds": []any{serviceID},
+		"businessId": biz, "name": "نگار", "title": "آرایشگر", "phone": "09120001133", "serviceIds": []any{serviceID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -101,5 +102,51 @@ func TestSignupAndBooking(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected slot conflict")
+	}
+	when, err := time.Parse(time.RFC3339Nano, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.now = func() time.Time { return when.Add(-30 * time.Minute) }
+	svc.RemindDue()
+	var channel, status string
+	if err := db.QueryRow(`SELECT channel, status FROM notification_jobs WHERE channel = 'sms' ORDER BY created_at DESC LIMIT 1`).Scan(&channel, &status); err != nil || channel != "sms" {
+		t.Fatalf("sms reminder %s %v", channel, err)
+	}
+	var inApp int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE booking_id = ? AND kind = 'booking_reminder'`, booked.(map[string]any)["id"]).Scan(&inApp); err != nil || inApp != 0 {
+		t.Fatalf("owner reminder %d %v", inApp, err)
+	}
+}
+
+func TestProductsAndServicesSaveLikeMenu(t *testing.T) {
+	raw := []map[string]any{
+		{"id": "p1", "type": "products", "active": true, "title": "فروشگاه", "url": "products", "layout": "grid", "currency": "toman", "items": []map[string]any{{"id": "i1", "kind": "item", "title": "کفش"}}},
+		{"id": "s1", "type": "services", "active": true, "title": "خدمات", "url": "", "items": []map[string]any{{"id": "i2", "kind": "item", "title": "مشاوره"}}},
+		{"id": "l1", "type": "link", "active": true, "title": "سایت", "url": "https://example.com"},
+	}
+	encoded, err := cleanPageBlocks(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal([]byte(encoded), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 {
+		t.Fatalf("blocks = %d", len(out))
+	}
+	if out[0]["url"] != "products" || out[0]["layout"] != "grid" {
+		t.Fatalf("products %#v", out[0])
+	}
+	items, _ := out[0]["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("product items %#v", out[0]["items"])
+	}
+	if out[1]["url"] != "services" {
+		t.Fatalf("services %#v", out[1])
+	}
+	if _, err := cleanPageBlocks([]map[string]any{{"id": "p1", "type": "products", "url": "https://shop.example/a"}}); err == nil {
+		t.Fatal("external url must not be a catalog path")
 	}
 }

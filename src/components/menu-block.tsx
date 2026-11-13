@@ -14,7 +14,9 @@ import { publicBusinessFn, placeMenuOrderFn } from "@/lib/api";
 import { JalaliCalendar } from "@/components/jalali-calendar";
 import { enDigits, faNum } from "@/lib/booking/fa";
 import { fitImage } from "@/lib/fit-image";
+import { deliverySlots, type ShopSpan } from "@/lib/shop-hours";
 import { pageIcon } from "@/lib/page-icons";
+import { todayYmd as todayInZone } from "@/lib/booking/time";
 
 const statuses = [
   { id: "available", label: "موجود" },
@@ -783,6 +785,8 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
   const [ordering, setOrdering] = useState(false);
   const [picking, setPicking] = useState<ContactItem | null>(null);
   const [cart, setCart] = useState<CartLine[]>([]);
+  const [hours, setHours] = useState<ShopSpan[]>([]);
+  const [zone, setZone] = useState("Asia/Tehran");
   useEffect(() => {
     let live = true;
     publicBusinessFn({ data: { slug } }).then((res) => {
@@ -793,6 +797,8 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
         return;
       }
       setName(res.data?.name ?? "");
+      setZone(res.data?.timezone || "Asia/Tehran");
+      setHours(Array.isArray(res.data?.shopHours) ? res.data.shopHours : []);
       const blocks = Array.isArray(res.data?.pageBlocks) ? (res.data.pageBlocks as MenuBlock[]) : [];
       const path = decodeURIComponent(page);
       setBlock(blocks.find((item) => (item.type === "menu" || item.type === "products" || item.type === "services") && item.active !== false && (item.url?.trim() || catalogFallback(item.type)) === path) ?? null);
@@ -811,7 +817,7 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
   const loose = dishes.filter((item) => !item.categoryId || !categories.some((category) => category.id === item.categoryId));
   const Mark = pageIcon(block.icon) ?? catalogMark((block.type === "products" || block.type === "services" ? block.type : "menu") as CatalogMode);
   const count = cart.reduce((sum, line) => sum + line.qty, 0);
-  const total = cart.reduce((sum, line) => sum + linePrice(line.item, line.variantId) * line.qty, 0);
+  const total = cartSum(cart);
   function changeLine(item: ContactItem, variantId: string, delta: number) {
     const key = `${item.id}:${variantId}`;
     if (delta > 0 && !cart.some((line) => line.key === key)) toast.success("به سبد اضافه شد");
@@ -850,7 +856,7 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
       {count > 0 ? (
         <button type="button" onClick={() => setOrdering(true)} className="sticky bottom-4 mt-6 flex w-full items-center justify-between rounded-full bg-ink px-5 py-3 text-sm font-semibold text-on-ink">
           <span className="inline-flex items-center gap-2"><ShoppingBag className="size-4" />سبد خرید · {faNum(count)}</span>
-          <span>{formatMenuMoney(total, currency)}</span>
+          <span>{total.priced ? formatMenuMoney(total.amount, currency) : "جمع قطعی نیست"}</span>
         </button>
       ) : null}
       {picking ? <PickSheet item={picking} currency={currency} cart={cart} onClose={() => setPicking(null)} onChange={changeLine} /> : null}
@@ -859,6 +865,8 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
           slug={slug}
           cart={cart}
           currency={currency}
+          hours={hours}
+          zone={zone}
           onClose={() => setOrdering(false)}
           onChange={setCart}
           onDone={() => {
@@ -886,7 +894,10 @@ function MenuItems({ items, layout, currency, cart, onOpen, onChange }: {
           <article key={item.id} className="overflow-hidden rounded-xl border border-line bg-card">
             {item.link && item.status !== "unavailable" ? <a href={item.link} target="_blank" rel="noreferrer">{item.image ? <img src={item.image} alt="" className="aspect-square w-full object-cover" /> : <span className="grid aspect-square w-full place-items-center bg-paper text-muted"><UtensilsCrossed className="size-8" /></span>}</a> : item.image ? <img src={item.image} alt="" className="aspect-square w-full object-cover" /> : <span className="grid aspect-square w-full place-items-center bg-paper text-muted"><UtensilsCrossed className="size-8" /></span>}
             <div className="grid gap-2 p-3">
-              <p className="truncate font-semibold">{item.title}</p>
+              <p className="truncate font-semibold">{item.featured ? "پیشنهاد · " : ""}{item.title}</p>
+              {item.value?.trim() ? <p className="line-clamp-2 text-xs leading-5 text-muted">{item.value}</p> : null}
+              {item.labels?.length ? <p className="truncate text-[11px] text-muted">{item.labels.join(" · ")}</p> : null}
+              {item.sku ? <p className="truncate text-[11px] text-muted" dir="ltr">{item.sku}</p> : null}
               <p className="text-sm text-muted">{priceWithUnit(item, currency)}</p>
               <ItemQty item={item} cart={cart} onOpen={onOpen} onChange={onChange} />
             </div>
@@ -901,7 +912,10 @@ function MenuItems({ items, layout, currency, cart, onOpen, onChange }: {
         <article key={item.id} className={`flex items-center gap-3 ${layout === "card" ? "rounded-xl border border-line bg-card px-3 py-3" : "py-2"}`}>
           {item.image ? <img src={item.image} alt="" className="size-14 shrink-0 rounded-lg object-cover" /> : <span className="grid size-14 shrink-0 place-items-center rounded-lg bg-paper text-muted"><UtensilsCrossed className="size-5" /></span>}
           <div className="min-w-0 flex-1">
-            <p className="truncate font-semibold">{item.title}</p>
+            <p className="truncate font-semibold">{item.featured ? "پیشنهاد · " : ""}{item.title}</p>
+            {item.value?.trim() ? <p className="line-clamp-2 text-xs leading-5 text-muted">{item.value}</p> : null}
+            {item.labels?.length ? <p className="truncate text-[11px] text-muted">{item.labels.join(" · ")}</p> : null}
+            {item.sku ? <p className="truncate text-[11px] text-muted" dir="ltr">{item.sku}</p> : null}
             <p className="text-sm text-muted">{priceWithUnit(item, currency)}</p>
             {orderVariants(item).length > 0 ? <div className="mt-2"><ItemQty item={item} cart={cart} onOpen={onOpen} onChange={onChange} /></div> : null}
           </div>
@@ -974,11 +988,22 @@ function orderVariants(item: ContactItem) {
   return (item.variants ?? []).filter((variant) => variant.status !== "hidden" && variant.status !== "unavailable");
 }
 
-function linePrice(item: ContactItem, variantId: string) {
+function linePrice(item: ContactItem, variantId: string): number | null {
+  if (item.priceType === "free") return 0;
+  if (item.priceType === "from" || item.priceType === "range" || item.priceType === "contact") return null;
   const variant = item.variants?.find((row) => row.id === variantId);
   if (variant) return variant.price;
-  if (item.priceType === "free") return 0;
   return item.price ?? 0;
+}
+
+function cartSum(cart: CartLine[]) {
+  let amount = 0;
+  for (const line of cart) {
+    const price = linePrice(line.item, line.variantId);
+    if (price == null) return { amount: 0, priced: false };
+    amount += price * line.qty;
+  }
+  return { amount, priced: true };
 }
 
 function lineLabel(line: CartLine) {
@@ -987,16 +1012,6 @@ function lineLabel(line: CartLine) {
 }
 
 type CartLine = { key: string; item: ContactItem; variantId: string; qty: number };
-
-function todayYmd() {
-  const date = new Date();
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-const orderTimes = Array.from({ length: 29 }, (_, index) => {
-  const total = 8 * 60 + index * 30;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-});
 
 function PickSheet({ item, currency, cart, onClose, onChange }: {
   item: ContactItem;
@@ -1026,7 +1041,7 @@ function PickSheet({ item, currency, cart, onClose, onChange }: {
   return desktop ? <PlainWindow title={item.title || "گزینه"} onClose={onClose}>{body}</PlainWindow> : <PlainSheet title={item.title || "گزینه"} onClose={onClose}>{body}</PlainSheet>;
 }
 
-function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: string; cart: CartLine[]; currency: string; onClose: () => void; onChange: (lines: CartLine[]) => void; onDone: () => void }) {
+function CartSheet({ slug, cart, currency, hours, zone, onClose, onChange, onDone }: { slug: string; cart: CartLine[]; currency: string; hours: ShopSpan[]; zone: string; onClose: () => void; onChange: (lines: CartLine[]) => void; onDone: () => void }) {
   const desktop = useDesktop();
   const [step, setStep] = useState<"cart" | "form" | "done">("cart");
   const [customer, setCustomer] = useState("");
@@ -1034,11 +1049,13 @@ function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: 
   const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [when, setWhen] = useState<"now" | "later">("now");
-  const [day, setDay] = useState(todayYmd);
-  const [time, setTime] = useState("12:00");
+  const [day, setDay] = useState(todayInZone(zone));
+  const slots = deliverySlots(day, hours, zone);
+  const [time, setTime] = useState("");
   const [note, setNote] = useState("");
+  const [doneUrl, setDoneUrl] = useState("");
   const [busy, setBusy] = useState(false);
-  const total = cart.reduce((sum, line) => sum + linePrice(line.item, line.variantId) * line.qty, 0);
+  const total = cartSum(cart);
   function setQty(key: string, qty: number) {
     if (qty < 1) onChange(cart.filter((line) => line.key !== key));
     else onChange(cart.map((line) => (line.key === key ? { ...line, qty: Math.min(20, qty) } : line)));
@@ -1052,8 +1069,8 @@ function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: 
       toast.error("نام و نام خانوادگی را وارد کنید");
       return;
     }
-    if (address.trim().length < 5) {
-      toast.error("آدرس را کامل‌تر بنویسید");
+    if (when === "later" && !slots.includes(time)) {
+      toast.error("یک ساعت داخل ساعت کاری انتخاب کنید");
       return;
     }
     setBusy(true);
@@ -1076,12 +1093,15 @@ function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: 
       toast.error(res.error);
       return;
     }
+    const token = String(res.data?.receiptToken ?? "");
+    setDoneUrl(token ? `${window.location.origin}/r/${token}` : "");
     setStep("done");
   }
   const body = step === "done" ? (
     <div className="grid gap-3 text-center">
       <p className="text-lg font-extrabold">سفارش ثبت شد</p>
-      <p className="text-sm leading-7 text-muted">سفارش را گرفتیم و به آدرسی که نوشتی می‌فرستیم. برای هماهنگی با همین شماره تماس می‌گیریم.</p>
+      <p className="text-sm leading-7 text-muted">سفارشتون ثبت شد. جزئیاتش رو می‌تونید از لینک زیر ببینید. همین پیام برای شماره شما هم ارسال شد.</p>
+      {doneUrl ? <a href={doneUrl} className="break-all text-sm font-semibold text-jade">{doneUrl}</a> : null}
       <button type="button" onClick={onDone} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-4 text-sm font-semibold text-on-ink">باشه</button>
     </div>
   ) : step === "cart" ? (
@@ -1091,7 +1111,7 @@ function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: 
         <div key={line.key} className="flex items-center gap-3 rounded-xl border border-line bg-card p-3">
           <div className="min-w-0 flex-1">
             <p className="truncate font-semibold">{lineLabel(line)}</p>
-            <p className="text-xs text-muted">{formatMenuMoney(linePrice(line.item, line.variantId) * line.qty, currency)}</p>
+            <p className="text-xs text-muted">{linePrice(line.item, line.variantId) == null ? priceText(line.item, currency) : formatMenuMoney((linePrice(line.item, line.variantId) ?? 0) * line.qty, currency)}</p>
           </div>
           <div className="flex items-center gap-2">
             <button type="button" aria-label={line.qty === 1 ? "حذف" : "کم کردن"} onClick={() => setQty(line.key, line.qty - 1)} className="grid size-8 place-items-center rounded-full border border-line">{line.qty === 1 ? <Trash2 className="size-4" /> : "−"}</button>
@@ -1101,12 +1121,12 @@ function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: 
           <button type="button" aria-label="حذف" onClick={() => setQty(line.key, 0)} className="grid size-8 place-items-center text-muted"><Trash2 className="size-4" /></button>
         </div>
       ))}
-      <p className="text-sm font-semibold">جمع: {formatMenuMoney(total, currency)}</p>
+      <p className="text-sm font-semibold">{total.priced ? `جمع: ${formatMenuMoney(total.amount, currency)}` : "جمع قطعی نیست"}</p>
       <button type="button" disabled={cart.length === 0} onClick={() => setStep("form")} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-4 text-sm font-semibold text-on-ink disabled:opacity-50">ادامه و ثبت سفارش</button>
     </div>
   ) : (
     <div className="grid gap-3">
-      <p className="text-sm text-muted">{faNum(cart.reduce((sum, line) => sum + line.qty, 0))} کالا · {formatMenuMoney(total, currency)}</p>
+      <p className="text-sm text-muted">{faNum(cart.reduce((sum, line) => sum + line.qty, 0))} کالا{total.priced ? ` · ${formatMenuMoney(total.amount, currency)}` : " · جمع قطعی نیست"}</p>
       <Field label="نام و نام خانوادگی">
         <TextInput value={customer} maxLength={80} onChange={(event) => setCustomer(event.target.value)} />
       </Field>
@@ -1126,21 +1146,24 @@ function CartSheet({ slug, cart, currency, onClose, onChange, onDone }: { slug: 
             <span className="block text-sm font-semibold">هرچه زودتر</span>
             <span className={`mt-0.5 block text-xs ${when === "now" ? "text-on-ink/80" : "text-muted"}`}>همین حالا آماده و ارسال شود</span>
           </button>
-          <button type="button" onClick={() => setWhen("later")} className={`rounded-xl border px-3 py-3 text-start ${when === "later" ? "border-ink bg-ink text-on-ink" : "border-line bg-card"}`}>
+          <button type="button" disabled={hours.length === 0} onClick={() => setWhen("later")} className={`rounded-xl border px-3 py-3 text-start disabled:opacity-50 ${when === "later" ? "border-ink bg-ink text-on-ink" : "border-line bg-card"}`}>
             <span className="block text-sm font-semibold">زمان دلخواه</span>
             <span className={`mt-0.5 block text-xs ${when === "later" ? "text-on-ink/80" : "text-muted"}`}>تاریخ و ساعت را خودت مشخص کن</span>
           </button>
         </div>
       </Field>
+      {hours.length === 0 ? <p className="text-xs text-muted">ساعت کاری هنوز تنظیم نشده. فقط «هرچه زودتر» ممکن است.</p> : null}
       {when === "later" ? (
         <>
-          <JalaliCalendar value={day} min={todayYmd()} onChange={setDay} />
+          <JalaliCalendar value={day} min={todayInZone(zone)} onChange={(next) => { setDay(next); setTime(""); }} />
           <Field label="ساعت">
-            <div className="flex flex-wrap gap-2">
-              {orderTimes.map((slot) => (
-                <button key={slot} type="button" onClick={() => setTime(slot)} className={`min-h-10 rounded-full px-3 text-sm tabular-nums ${time === slot ? "bg-ink text-on-ink" : "border border-line bg-card"}`}>{faNum(slot)}</button>
-              ))}
-            </div>
+            {slots.length === 0 ? <p className="text-sm text-muted">در این روز ساعت تحویل باز نیست.</p> : (
+              <div className="flex flex-wrap gap-2">
+                {slots.map((slot) => (
+                  <button key={slot} type="button" onClick={() => setTime(slot)} className={`min-h-10 rounded-full px-3 text-sm tabular-nums ${time === slot ? "bg-ink text-on-ink" : "border border-line bg-card"}`}>{faNum(slot)}</button>
+                ))}
+              </div>
+            )}
           </Field>
         </>
       ) : null}

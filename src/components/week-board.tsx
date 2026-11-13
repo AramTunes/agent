@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import { AnimatedTabs } from "@/components/animated-tabs";
+import { AppWindow } from "@/components/panel-window";
 import { ScrollArea } from "@/components/scroll-area";
-import { Card, Skeleton } from "@/components/ui";
-import { businessBookingsFn } from "@/lib/api";
+import { Button, Card, DialogActions, Field, Skeleton, TextInput } from "@/components/ui";
+import { availabilityFn, businessBookingsFn, rescheduleBookingFn, setBookingStatusFn } from "@/lib/api";
 import { clockLabel, faNum, STATUS_FA, WEEKDAYS_FA } from "@/lib/booking/fa";
+import { formatDay, formatWhen } from "@/lib/booking/format";
 import { gregorianToJalali, jalaliMonthName } from "@/lib/booking/jalali";
-import { addDaysYmd, civilInZone, todayYmd, zonedCivilToUtc } from "@/lib/booking/time";
+import { addDaysYmd, civilInZone, todayYmd, ymd, zonedCivilToUtc } from "@/lib/booking/time";
 
 type Span = { weekday: number; startMin: number; endMin: number };
 type Booking = {
   id: string;
   customerName: string;
   serviceName: string;
+  serviceId: string;
+  staffId: string;
   staffName?: string;
   startsAt: string;
   endsAt?: string;
@@ -40,6 +45,8 @@ export function WeekBoard({
   const days = weekDays(zone);
   const [day, setDay] = useState(today);
   const [rows, setRows] = useState<Booking[] | null>(null);
+  const [picked, setPicked] = useState<Booking | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const body = useRef<HTMLDivElement>(null);
   const selected = days.find((item) => item.ymd === day) ?? days[0];
   const index = Math.max(0, days.findIndex((item) => item.ymd === selected.ymd));
@@ -54,10 +61,11 @@ export function WeekBoard({
     return () => {
       live = false;
     };
-  }, [businessId, day]);
+  }, [businessId, day, reloadKey]);
 
   const visible = (rows ?? []).filter((row) => row.status !== "cancelled");
   const range = rangeFor(weekly, selected.weekday, visible, zone);
+  const off = !weekly.some((span) => span.weekday === selected.weekday && span.endMin > span.startMin);
   const now = new Date();
   const nowCivil = civilInZone(now, zone);
   const nowMin = nowCivil.hour * 60 + nowCivil.minute;
@@ -78,7 +86,7 @@ export function WeekBoard({
       <div className="mt-3 overflow-hidden rounded-lg border border-line">
         <div className="flex border-b border-line">
           <div className="w-14 shrink-0" />
-          <div className={`flex min-w-0 flex-1 flex-col items-center border-s border-line px-2 py-1.5 ${selected.weekday === 5 ? "bg-danger-soft" : ""}`}>
+          <div className={`flex min-w-0 flex-1 flex-col items-center border-s border-line px-2 py-1.5 ${off ? "bg-danger-soft" : ""}`}>
             <span className="text-xs text-muted">{selected.name}</span>
             <span className="text-sm font-semibold">{selected.date}</span>
           </div>
@@ -92,12 +100,25 @@ export function WeekBoard({
               endHour={range.endHour}
               events={place(visible, zone)}
               showStaff={showStaff}
-              friday={selected.weekday === 5}
+              friday={off}
               nowTop={day === today && nowMin >= range.startHour * 60 && nowMin <= range.endHour * 60 ? ((nowMin - range.startHour * 60) / 60) * HOUR : null}
+              onPick={setPicked}
             />
           </ScrollArea>
         ) : null}
       </div>
+      {picked ? (
+        <VisitDialog
+          booking={picked}
+          businessId={businessId}
+          zone={zone}
+          onClose={() => setPicked(null)}
+          onDone={() => {
+            setPicked(null);
+            setReloadKey((value) => value + 1);
+          }}
+        />
+      ) : null}
     </Card>
   );
 }
@@ -156,6 +177,7 @@ function DayGrid({
   friday,
   nowTop,
   showStaff,
+  onPick,
 }: {
   startHour: number;
   endHour: number;
@@ -163,6 +185,7 @@ function DayGrid({
   friday: boolean;
   nowTop: number | null;
   showStaff: boolean;
+  onPick: (booking: Booking) => void;
 }) {
   const hours = Array.from({ length: endHour - startHour }, (_, index) => startHour + index);
   const height = hours.length * HOUR;
@@ -192,14 +215,18 @@ function DayGrid({
               className="absolute px-0.5"
               style={{ top, height: block, insetInlineStart: `${(event.col / event.cols) * 100}%`, width: `${100 / event.cols}%` }}
             >
-              <div className="flex h-full flex-col overflow-hidden rounded-md border-s-2 border-jade bg-jade-soft px-1.5 py-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => onPick(event)}
+                className={`flex h-full w-full flex-col overflow-hidden rounded-md border-s-2 px-1.5 py-0.5 text-start text-xs ${event.status === "no_show" ? "border-danger bg-danger-soft" : event.status === "completed" ? "border-line bg-paper" : "border-jade bg-jade-soft"}`}
+              >
                 <span className="truncate font-semibold">{event.customerName}</span>
                 {block > 36 ? (
                   <span className="truncate text-muted">
                     {event.serviceName}{showStaff && event.staffName ? ` · ${event.staffName}` : ""} · {clockLabel(event.start)} · {STATUS_FA[event.status] ?? event.status}
                   </span>
                 ) : null}
-              </div>
+              </button>
             </div>
           );
         })}
@@ -211,6 +238,139 @@ function DayGrid({
         ) : null}
       </div>
     </div>
+  );
+}
+
+function VisitDialog({
+  booking,
+  businessId,
+  zone,
+  onClose,
+  onDone,
+}: {
+  booking: Booking;
+  businessId: string;
+  zone: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const open = booking.status === "confirmed" || booking.status === "pending";
+  const [mode, setMode] = useState<"main" | "cancel" | "move">("main");
+  const [reason, setReason] = useState("");
+  const [pending, setPending] = useState(false);
+  const [moveDay, setMoveDay] = useState(() => {
+    const civil = civilInZone(new Date(booking.startsAt), zone);
+    return ymd(civil.year, civil.month, civil.day);
+  });
+  const [slots, setSlots] = useState<{ start: string; taken?: boolean }[] | null>(null);
+  const days = Array.from({ length: 14 }, (_, index) => addDaysYmd(todayYmd(zone), index, zone));
+
+  useEffect(() => {
+    if (mode !== "move") return;
+    let live = true;
+    setSlots(null);
+    availabilityFn({
+      data: { businessId, serviceId: booking.serviceId, staffId: booking.staffId, day: moveDay, exceptBookingId: booking.id },
+    }).then((res) => {
+      if (!live) return;
+      setSlots(res.ok ? (res.data.slots ?? []) : []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [mode, moveDay, businessId, booking.serviceId, booking.staffId, booking.id]);
+
+  async function setStatus(status: string, note = "") {
+    setPending(true);
+    const res = await setBookingStatusFn({ data: { bookingId: booking.id, status, reason: note } });
+    setPending(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(status === "completed" ? "نوبت انجام شد" : status === "no_show" ? "عدم مراجعه ثبت شد" : status === "confirmed" ? "نوبت تأیید شد" : "نوبت لغو شد");
+    onDone();
+  }
+
+  async function move(start: string) {
+    setPending(true);
+    const res = await rescheduleBookingFn({ data: { bookingId: booking.id, start, staffId: booking.staffId } });
+    setPending(false);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("نوبت جابه‌جا شد");
+    onDone();
+  }
+
+  const free = (slots ?? []).filter((slot) => !slot.taken && slot.start !== booking.startsAt);
+
+  return (
+    <AppWindow title={booking.customerName || "نوبت"} onClose={onClose} onBack={mode === "main" ? undefined : () => setMode("main")}>
+      <p className="text-sm leading-6 text-muted">
+        {booking.serviceName}{booking.staffName ? ` · ${booking.staffName}` : ""}
+      </p>
+      <p className="mt-1 text-sm">{formatWhen(booking.startsAt, zone)}</p>
+      <p className="mt-1 text-sm font-semibold">{STATUS_FA[booking.status] ?? booking.status}</p>
+      {mode === "main" && open ? (
+        <div className="mt-4 grid gap-2">
+          {booking.status === "pending" ? <Button disabled={pending} onClick={() => void setStatus("confirmed")}>تأیید</Button> : null}
+          {booking.status === "confirmed" ? <Button disabled={pending} onClick={() => void setStatus("completed")}>انجام شد</Button> : null}
+          {booking.status === "confirmed" ? <Button variant="quiet" disabled={pending} onClick={() => void setStatus("no_show")}>نیامد</Button> : null}
+          <Button variant="quiet" disabled={pending} onClick={() => setMode("move")}>جابه‌جایی</Button>
+          <Button variant="danger" disabled={pending} onClick={() => setMode("cancel")}>لغو</Button>
+        </div>
+      ) : null}
+      {mode === "cancel" ? (
+        <form
+          className="mt-4 grid gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void setStatus("cancelled", reason.trim() || "لغو توسط کسب‌وکار");
+          }}
+        >
+          <Field label="دلیل لغو">
+            <TextInput value={reason} onChange={(event) => setReason(event.target.value)} placeholder="اختیاری" />
+          </Field>
+          <DialogActions>
+            <Button type="button" variant="quiet" onClick={() => setMode("main")}>انصراف</Button>
+            <Button type="submit" variant="danger" disabled={pending}>{pending ? "در حال لغو" : "لغو نوبت"}</Button>
+          </DialogActions>
+        </form>
+      ) : null}
+      {mode === "move" ? (
+        <div className="mt-4 grid gap-3">
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {days.map((item) => (
+              <button
+                key={item}
+                type="button"
+                onClick={() => setMoveDay(item)}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${item === moveDay ? "bg-ink text-on-ink" : "border border-line"}`}
+              >
+                {formatDay(item)}
+              </button>
+            ))}
+          </div>
+          {slots === null ? <Skeleton className="h-20" /> : null}
+          {slots && free.length === 0 ? <p className="text-sm text-muted">در این روز وقت آزادی نیست.</p> : null}
+          <div className="grid grid-cols-3 gap-2">
+            {free.map((slot) => (
+              <button
+                key={slot.start}
+                type="button"
+                disabled={pending}
+                onClick={() => void move(slot.start)}
+                className="min-h-11 rounded-xl border border-line text-sm"
+              >
+                {formatWhen(slot.start, zone).split("،")[1]?.trim() || formatWhen(slot.start, zone)}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </AppWindow>
   );
 }
 

@@ -1,10 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { BarChart3, CalendarPlus, ChevronLeft, LifeBuoy, Link2, PenLine, QrCode, Settings, Users } from "lucide-react";
+import { BarChart3, CalendarPlus, ChevronLeft, ClipboardList, LifeBuoy, Link2, PenLine, QrCode, Settings, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
 import { ProgressRing } from "@/components/progress-ring";
 import { Button, Card, Field, Skeleton, TextInput } from "@/components/ui";
+import { Select } from "@/components/ui/select";
 import { DualSpark } from "@/components/sparkline";
 import { WeekBoard } from "@/components/week-board";
 import { categoriesFn, createBusinessFn, createDemoFn, dashboardFn, manageBusinessFn, resolveFollowupFn } from "@/lib/api";
@@ -12,23 +13,18 @@ import { assignRandomPageAvatar, PageMark } from "@/lib/page-avatar";
 import { QrDialog } from "@/components/qr-share";
 import { faNum, toman } from "@/lib/booking/fa";
 import { formatWhen } from "@/lib/booking/format";
+import { focusKind } from "@/lib/business-focus";
+import { followups, type Followup, type OverdueBooking } from "@/lib/followups";
 
 export const Route = createFileRoute("/panel/")({ component: PanelHome });
 
-function tehranMinutes(now = new Date()) {
+function greeting(zone: string, now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
     hour: "numeric",
-    minute: "numeric",
     hourCycle: "h23",
-    timeZone: "Asia/Tehran",
+    timeZone: zone || "Asia/Tehran",
   }).formatToParts(now);
   const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
-  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
-  return hour * 60 + minute;
-}
-
-function greeting(now = new Date()) {
-  const hour = Math.floor(tehranMinutes(now) / 60);
   if (hour >= 5 && hour < 12) return "صبح بخیر";
   if (hour >= 12 && hour < 15) return "ظهر بخیر";
   if (hour >= 15 && hour < 19) return "عصر بخیر";
@@ -40,12 +36,12 @@ function firstName(full: string) {
   return name || "کاربر";
 }
 
-const zeros = Array.from({ length: 30 }, () => 0);
-const emptySeries = { views: zeros, visitors: zeros, sales: zeros, revenue: zeros };
+const emptySeries = { views: [] as number[], visitors: [] as number[], done: [] as number[], revenue: [] as number[], orders: [] as number[], orderRevenue: [] as number[] };
 const emptyStats = {
   views: 0, visitors: 0, clicks: 0,
-  booked: 0, cancelled: 0, completed: 0, sales: 0, revenueToman: 0,
-  prevViews: 0, prevRevenueToman: 0,
+  booked: 0, cancelled: 0, missed: 0, completed: 0, revenueToman: 0,
+  converted: 0, orders: 0, orderCancelled: 0, orderRevenue: 0, orderMoney: true,
+  prevViews: 0, prevRevenueToman: 0, prevCompleted: 0, prevOrders: 0, prevOrderRevenue: 0,
 };
 
 type MonthStats = typeof emptyStats & { series: typeof emptySeries };
@@ -64,47 +60,7 @@ function monthChange(current: number, previous: number) {
   return { text: `${faNum(Math.abs(pct))}٪ پسرفت نسبت به ماه قبل`, tone: "text-danger" };
 }
 
-type Followup = { id: string; text: string; to: "/panel/services" | "/panel/staff" | "/panel/settings"; progress?: number; done?: number; total?: number };
-
-function followups(data: {
-  services?: { active?: boolean }[];
-  staff?: { active?: boolean; weekly?: unknown[] }[];
-  phone?: string;
-  subscription?: { endsAt?: string; status?: string };
-  smsCredit?: number;
-}, personal: boolean): Followup[] {
-  const items: Followup[] = [];
-  const services = (data.services ?? []).filter((item) => item.active !== false);
-  const ready = (data.staff ?? []).filter((item) => item.active !== false && (item.weekly?.length ?? 0) > 0);
-  const hasService = services.length > 0;
-  const hasStaff = ready.length > 0;
-  const hasPhone = Boolean(String(data.phone ?? "").trim());
-  if (!hasService || !hasStaff || !hasPhone) {
-    const done = Number(hasService) + Number(hasStaff) + Number(hasPhone);
-    const to = !hasService ? "/panel/services" : !hasStaff ? "/panel/staff" : "/panel/settings";
-    const kind = personal ? "صفحه" : "کسب‌وکار";
-    items.push({
-      id: "setup",
-      text: `راه‌اندازی ${kind} هنوز تمام نشده. بیا تمامش کن.`,
-      to,
-      progress: Math.round((done / 3) * 100),
-      done,
-      total: 3,
-    });
-  }
-  if (data.subscription?.endsAt) {
-    const left = new Date(data.subscription.endsAt).getTime() - Date.now();
-    if (Number.isFinite(left) && left < 7 * 24 * 60 * 60 * 1000) {
-      items.push({ id: "plan", text: "اشتراکت دارد تمام می‌شود. بیا از صفحهٔ تنظیمات تمدیدش کن.", to: "/panel/settings" });
-    }
-  }
-  if (typeof data.smsCredit === "number" && data.smsCredit < 20) {
-    items.push({ id: "sms", text: "اعتبار پیامک‌ها دارد تمام می‌شود. بیا اعتبارش را افزایش بده.", to: "/panel/settings" });
-  }
-  return items;
-}
-
-type Overdue = { id: string; startsAt: string; serviceId: string; staffId: string; customer: string; phone: string; service: string; staff: string };
+type Overdue = OverdueBooking;
 
 function PanelHome() {
   const { businessId, memberships, displayName, pageFor, pageName, role } = usePanel();
@@ -118,8 +74,11 @@ function PanelHome() {
   const [services, setServices] = useState<{ id: string; name: string }[]>([]);
   const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
   const [pick, setPick] = useState<Overdue | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
   const [draft, setDraft] = useState({ serviceId: "", staffId: "" });
   const [schedule, setSchedule] = useState<{ timezone: string; weekly: { weekday: number; startMin: number; endMin: number }[] } | null>(null);
+  const [zone, setZone] = useState("Asia/Tehran");
+  const [focus, setFocus] = useState(focusKind(current?.categoryId));
   const [stats, setStats] = useState<MonthStats | null>(null);
 
   useEffect(() => {
@@ -152,6 +111,8 @@ function PanelHome() {
       const next = res.data.stats ?? emptyStats;
       setStats({ ...next, series: res.data.series ?? emptySeries });
       setOverdue(Array.isArray(res.data.overdue) ? res.data.overdue : []);
+      if (res.data.timezone) setZone(res.data.timezone);
+      if (res.data.focus === "orders" || res.data.focus === "booking") setFocus(res.data.focus);
     });
     return () => {
       live = false;
@@ -160,13 +121,19 @@ function PanelHome() {
 
   async function settle(status: "completed" | "cancelled") {
     if (!pick) return;
-    const res = await resolveFollowupFn({ data: { bookingId: pick.id, serviceId: draft.serviceId, staffId: draft.staffId, status } });
+    const reason = status === "cancelled" ? cancelReason.trim() : "";
+    if (status === "cancelled" && reason.length < 2) {
+      toast.error("دلیل لغو را بنویسید");
+      return;
+    }
+    const res = await resolveFollowupFn({ data: { bookingId: pick.id, serviceId: draft.serviceId, staffId: draft.staffId, status, reason } });
     if (!res.ok) {
       toast.error(res.error);
       return;
     }
     setOverdue((items) => items.filter((item) => item.id !== pick.id));
     setPick(null);
+    setCancelReason("");
     if (businessId) {
       const again = await dashboardFn({ data: { businessId } });
       if (again.ok) {
@@ -194,9 +161,11 @@ function PanelHome() {
             <Field label="شهر"><TextInput value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
             <Field label="تلفن"><TextInput dir="ltr" className="text-left" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
             <Field label="دسته">
-              <select className="min-h-11 rounded-lg border border-line bg-[#101011] px-3 text-ink" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
-                {categories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-              </select>
+              <Select
+                value={form.categoryId}
+                onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+                options={categories.map((cat) => ({ value: cat.id, label: cat.name }))}
+              />
             </Field>
             <Button type="submit">ساخت کسب‌وکار</Button>
           </form>
@@ -218,8 +187,9 @@ function PanelHome() {
   const personal = personalPage;
   const summary = personal ? "صفحه شما" : current?.name;
   const pageUrl = typeof window !== "undefined" && current?.slug ? `${window.location.origin}/b/${current.slug}` : "";
+  const ordersMode = focus !== "booking";
   const shortcuts = [
-    { label: "ثبت نوبت", icon: CalendarPlus, to: "/panel/calendar" as const },
+    { label: ordersMode ? "سفارشات" : "ثبت نوبت", icon: ordersMode ? ClipboardList : CalendarPlus, to: ordersMode ? "/panel/orders" as const : "/panel/calendar" as const },
     { label: "مشتریان", icon: Users, to: "/panel/customers" as const },
     { label: "گزارشات", icon: BarChart3, to: "/panel/reports" as const },
     ...(role === "staff" ? [] : [{ label: "ویرایش صفحه", icon: PenLine, to: "/panel/settings" as const }]),
@@ -230,7 +200,7 @@ function PanelHome() {
         <div className="flex min-w-0 items-center gap-3">
           <PageMark businessId={businessId} slug={current?.slug} name={current?.name || displayName} avatar={current?.avatar} size={48} />
           <div className="min-w-0">
-            <h1 className="text-2xl font-extrabold">{greeting()} {firstName(displayName)}</h1>
+            <h1 className="text-2xl font-extrabold">{greeting(zone)} {firstName(displayName)}</h1>
             <p className="mt-1 text-sm text-muted">خلاصه امروز {summary}</p>
           </div>
         </div>
@@ -306,7 +276,7 @@ function PanelHome() {
           <span className="font-bold">تنظیمات</span>
         </Link>
       </div>
-      {businessId && schedule ? (
+      {businessId && schedule && !ordersMode ? (
         <WeekBoard
           businessId={businessId}
           timezone={schedule.timezone}
@@ -317,7 +287,7 @@ function PanelHome() {
       ) : null}
       <section>
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-extrabold">عملکرد یکماه اخیر</h2>
+          <h2 className="font-extrabold">عملکرد این ماه</h2>
           <Link to="/panel/reports" className="text-sm font-semibold text-[#ffa640]">مشاهده بیشتر</Link>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -328,7 +298,7 @@ function PanelHome() {
                 ["بازدید", faNum(stats?.views ?? 0)],
                 ["بازدیدکننده", faNum(stats?.visitors ?? 0)],
                 ["کلیک", faNum(stats?.clicks ?? 0)],
-                ["درصد تبدیل", rate(stats?.booked ?? 0, stats?.visitors ?? 0)],
+                ["درصد تبدیل", rate(stats?.converted ?? 0, stats?.visitors ?? 0)],
               ].map(([label, value]) => (
                 <div key={label}>
                   <dt className="text-xs text-muted">{label}</dt>
@@ -340,20 +310,28 @@ function PanelHome() {
               <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[#ffa640]" />بازدید</span>
               <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[#f7f7f7]" />بازدیدکننده</span>
             </div>
-            <DualSpark primary={stats?.series.views ?? zeros} secondary={stats?.series.visitors ?? zeros} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
+            <DualSpark primary={stats?.series.views ?? []} secondary={stats?.series.visitors ?? []} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
             <p className={`mt-2 text-xs font-semibold ${monthChange(stats?.views ?? 0, stats?.prevViews ?? 0).tone}`}>{monthChange(stats?.views ?? 0, stats?.prevViews ?? 0).text}</p>
           </Card>
           )}
           <Card>
             <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
-              {[
-                ["نوبت ثبت‌شده", faNum(stats?.booked ?? 0)],
-                ["نوبت لغوشده", faNum(stats?.cancelled ?? 0)],
-                ["نوبت تکمیل‌شده", faNum(stats?.completed ?? 0)],
-                ["فروش", faNum(stats?.sales ?? 0)],
-                ["درآمد", toman(stats?.revenueToman ?? 0)],
-                ["درصد لغو", rate(stats?.cancelled ?? 0, (stats?.booked ?? 0) + (stats?.cancelled ?? 0))],
-              ].map(([label, value]) => (
+              {(ordersMode
+                ? [
+                    ["سفارش ثبت‌شده", faNum(stats?.orders ?? 0)],
+                    ["سفارش لغوشده", faNum(stats?.orderCancelled ?? 0)],
+                    ["درآمد", stats?.orderMoney === false ? "قطعی نیست" : toman(stats?.orderRevenue ?? 0)],
+                    ["درصد لغو", rate(stats?.orderCancelled ?? 0, (stats?.orders ?? 0) + (stats?.orderCancelled ?? 0))],
+                  ]
+                : [
+                    ["نوبت ثبت‌شده", faNum(stats?.booked ?? 0)],
+                    ["انجام‌شده", faNum(stats?.completed ?? 0)],
+                    ["لغوشده", faNum(stats?.cancelled ?? 0)],
+                    ["نیامده", faNum(stats?.missed ?? 0)],
+                    ["درآمد", toman(stats?.revenueToman ?? 0)],
+                    ["درصد لغو", rate(stats?.cancelled ?? 0, stats?.booked ?? 0)],
+                  ]
+              ).map(([label, value]) => (
                 <div key={label}>
                   <dt className="text-xs text-muted">{label}</dt>
                   <dd className="text-lg font-extrabold tabular-nums">{value}</dd>
@@ -361,11 +339,10 @@ function PanelHome() {
               ))}
             </dl>
             <div className="mt-3 flex items-center justify-between text-xs text-muted">
-              <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[#ffa640]" />فروش</span>
-              <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[#f7f7f7]" />درآمد</span>
+              <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[#ffa640]" />{ordersMode ? "درآمد" : "انجام‌شده"}</span>
             </div>
-            <DualSpark primary={stats?.series.sales ?? zeros} secondary={stats?.series.revenue ?? zeros} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
-            <p className={`mt-2 text-xs font-semibold ${monthChange(stats?.revenueToman ?? 0, stats?.prevRevenueToman ?? 0).tone}`}>{monthChange(stats?.revenueToman ?? 0, stats?.prevRevenueToman ?? 0).text}</p>
+            <DualSpark primary={ordersMode ? (stats?.series.orderRevenue ?? []) : (stats?.series.done ?? [])} secondary={[]} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
+            <p className={`mt-2 text-xs font-semibold ${monthChange(ordersMode ? (stats?.orderRevenue ?? 0) : (stats?.completed ?? 0), ordersMode ? (stats?.prevOrderRevenue ?? 0) : (stats?.prevCompleted ?? 0)).tone}`}>{monthChange(ordersMode ? (stats?.orderRevenue ?? 0) : (stats?.completed ?? 0), ordersMode ? (stats?.prevOrderRevenue ?? 0) : (stats?.prevCompleted ?? 0)).text}</p>
           </Card>
         </div>
       </section>
@@ -388,15 +365,24 @@ function PanelHome() {
             <p className="text-sm text-muted">{pick.customer} · {formatWhen(pick.startsAt, schedule?.timezone || "Asia/Tehran")}</p>
             <label className="grid gap-1 text-sm">
               خدمت
-              <select className="min-h-11 rounded-xl border border-line bg-paper px-3" value={draft.serviceId} onChange={(event) => setDraft({ ...draft, serviceId: event.target.value })}>
-                {services.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
+              <Select
+                value={draft.serviceId}
+                onChange={(event) => setDraft({ ...draft, serviceId: event.target.value })}
+                options={services.map((item) => ({ value: item.id, label: item.name }))}
+              />
             </label>
             <label className="grid gap-1 text-sm">
               پرسنل
-              <select className="min-h-11 rounded-xl border border-line bg-paper px-3" value={draft.staffId} disabled={role === "staff"} onChange={(event) => setDraft({ ...draft, staffId: event.target.value })}>
-                {people.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
+              <Select
+                value={draft.staffId}
+                disabled={role === "staff"}
+                onChange={(event) => setDraft({ ...draft, staffId: event.target.value })}
+                options={people.map((item) => ({ value: item.id, label: item.name }))}
+              />
+            </label>
+            <label className="grid gap-1 text-sm">
+              دلیل لغو
+              <TextInput value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="اگر لغو می‌کنید بنویسید" />
             </label>
             <div className="flex gap-2">
               <button type="button" className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink" onClick={() => void settle("completed")}>انجام شد</button>

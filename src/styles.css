@@ -198,13 +198,13 @@ html[data-theme="dark"] {
   }
 }
 
-@keyframes drawer-left {
-  from { transform: translateX(-100%); }
+@keyframes drawer-start {
+  from { transform: translateX(100%); }
   to { transform: translateX(0); }
 }
 
-.drawer-left {
-  animation: drawer-left 220ms ease-out;
+.drawer-start {
+  animation: drawer-start 220ms ease-out;
 }
 
 @keyframes sheet-up {

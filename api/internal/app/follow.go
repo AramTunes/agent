@@ -2,15 +2,17 @@ package app
 
 import (
 	"database/sql"
+	"strings"
+	"time"
 
 	"agent/internal/booking"
 )
 
 func (s *Service) overdueList(businessID, ownStaff string) []map[string]any {
 	now := booking.ISO(s.now())
-	query := `SELECT b.id, b.starts_at, b.service_id, b.staff_id, c.name, c.phone, sv.name, st.name
+	query := `SELECT b.id, b.starts_at, b.service_id, b.staff_id, COALESCE(c.name, ''), COALESCE(c.phone, ''), sv.name, st.name
 		FROM bookings b
-		JOIN customers c ON c.id = b.customer_id
+		LEFT JOIN customers c ON c.id = b.customer_id
 		JOIN services sv ON sv.id = b.service_id
 		JOIN staff st ON st.id = b.staff_id
 		WHERE b.business_id = ? AND b.status IN ('pending','confirmed') AND b.starts_at < ?`
@@ -46,8 +48,12 @@ func (s *Service) ResolveFollowup(userID string, raw map[string]any) (any, error
 	serviceID, _ := textOf(raw, "serviceId", 80, "")
 	staffID, _ := textOf(raw, "staffId", 80, "")
 	status, _ := textOf(raw, "status", 20, "")
+	reason, _ := textOf(raw, "reason", 200, "")
 	if status != "completed" && status != "cancelled" {
 		return nil, fail(400, "VALIDATION", "وضعیت را انتخاب کنید")
+	}
+	if status == "cancelled" && len([]rune(strings.TrimSpace(reason))) < 2 {
+		return nil, fail(400, "VALIDATION", "دلیل لغو را بنویسید")
 	}
 	var out map[string]any
 	err := s.tx(func(tx *sql.Tx) error {
@@ -84,10 +90,23 @@ func (s *Service) ResolveFollowup(userID string, raw map[string]any) (any, error
 		if role == "staff" && staffID != row.StaffID {
 			return fail(403, "FORBIDDEN", "پرسنل را نمی‌توانی عوض کنی")
 		}
-		now := s.now().UTC().Format("2006-01-02T15:04:05Z07:00")
-		if _, err := tx.Exec(`UPDATE bookings SET service_id = ?, staff_id = ?, status = ?, updated_at = ? WHERE id = ?`, serviceID, staffID, status, now, bookingID); err != nil {
+		now := s.now().UTC().Format(time.RFC3339)
+		cancel := row.Reason
+		if status == "cancelled" {
+			cancel = strings.TrimSpace(reason)
+		}
+		if _, err := tx.Exec(`UPDATE bookings SET service_id = ?, staff_id = ?, status = ?, cancel_reason = ?, updated_at = ? WHERE id = ?`, serviceID, staffID, status, cancel, now, bookingID); err != nil {
 			return err
 		}
+		titles := map[string]string{"cancelled": "نوبت لغو شد", "completed": "نوبت انجام شد"}
+		title := titles[status]
+		body := row.ServiceName
+		if status == "cancelled" && cancel != "" {
+			body += " — " + cancel
+		}
+		ids := append(s.memberIDs(tx, row.BusinessID), row.CustomerUser.String)
+		s.notify(tx, ids, row.BusinessID, bookingID, "booking_"+status, title, body)
+		_ = s.audit(tx, userID, "booking_status", "booking", strPtr(bookingID), strPtr(row.BusinessID), status)
 		next, err := s.loadBooking(tx, bookingID)
 		if err != nil {
 			return err

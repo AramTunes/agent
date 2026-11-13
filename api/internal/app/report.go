@@ -435,15 +435,15 @@ func (s *Service) orderStats(businessID, from, to string, days []string, loc *ti
 	series := make([]int, len(days))
 	hours := make([]int, 24)
 	weekdays := make([]int, 7)
-	total, revenue, cancelled := 0, 0, 0
+	total, revenue, cancelled, pricedCount := 0, 0, 0, 0
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
-	rows, err := s.db.Query(`SELECT created_at, price, status FROM menu_orders WHERE business_id = ? AND created_at >= ? AND created_at < ?`, businessID, start, end)
+	rows, err := s.db.Query(`SELECT created_at, price, status, priced FROM menu_orders WHERE business_id = ? AND created_at >= ? AND created_at < ?`, businessID, start, end)
 	if err == nil {
 		for rows.Next() {
 			var at, status string
-			var price int
-			if rows.Scan(&at, &price, &status) != nil {
+			var price, priced int
+			if rows.Scan(&at, &price, &status, &priced) != nil {
 				continue
 			}
 			when, err := time.Parse(time.RFC3339Nano, at)
@@ -460,7 +460,10 @@ func (s *Service) orderStats(businessID, from, to string, days []string, loc *ti
 			local := when.In(loc)
 			day := booking.TodayYMD(loc, local)
 			total++
-			revenue += price
+			if priced != 0 {
+				revenue += price
+				pricedCount++
+			}
 			hours[local.Hour()]++
 			weekdays[int(local.Weekday())]++
 			if i, ok := index[day]; ok {
@@ -470,8 +473,8 @@ func (s *Service) orderStats(businessID, from, to string, days []string, loc *ti
 		rows.Close()
 	}
 	average := 0
-	if total > 0 {
-		average = revenue / total
+	if pricedCount > 0 {
+		average = revenue / pricedCount
 	}
 	peak, peakValue := -1, 0
 	for hour, value := range hours {
@@ -489,7 +492,7 @@ func (s *Service) topItems(businessID, from, to string, loc *time.Location) []ma
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
 	counts := map[string]int{}
-	rows, err := s.db.Query(`SELECT lines, item_title FROM menu_orders WHERE business_id = ? AND created_at >= ? AND created_at < ?`, businessID, start, end)
+	rows, err := s.db.Query(`SELECT lines, item_title FROM menu_orders WHERE business_id = ? AND status <> 'cancelled' AND created_at >= ? AND created_at < ?`, businessID, start, end)
 	if err != nil {
 		return []map[string]any{}
 	}
@@ -606,19 +609,26 @@ func (s *Service) staffBreakdown(businessID, ownStaff, from, to string, loc *tim
 	if err != nil {
 		return out
 	}
-	hours := s.staffHours(businessID, ownStaff, start, end, loc)
+	type staffRow struct {
+		id, label          string
+		revenue, missed, n int
+	}
+	parsed := []staffRow{}
 	for rows.Next() {
-		var id, label string
-		var revenue, missed, total int
-		if rows.Scan(&id, &label, &revenue, &missed, &total) != nil || label == "" {
+		var row staffRow
+		if rows.Scan(&row.id, &row.label, &row.revenue, &row.missed, &row.n) != nil || row.label == "" {
 			continue
 		}
-		out = append(out, map[string]any{
-			"label": label, "revenue": revenue, "missed": missed, "total": total,
-			"hours": hours[id],
-		})
+		parsed = append(parsed, row)
 	}
 	rows.Close()
+	hours := s.staffHours(businessID, ownStaff, start, end, loc)
+	for _, row := range parsed {
+		out = append(out, map[string]any{
+			"label": row.label, "revenue": row.revenue, "missed": row.missed, "total": row.n,
+			"hours": hours[row.id],
+		})
+	}
 	return out
 }
 
@@ -704,7 +714,7 @@ func (s *Service) staffHours(businessID, ownStaff, start, end string, loc *time.
 func (s *Service) groupBreakdown(businessID, ownStaff, from, to string, loc *time.Location) []map[string]any {
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
-	query := `SELECT CASE WHEN c.group_name = '' THEN 'بدون گروه' ELSE c.group_name END,
+	query := `SELECT CASE WHEN TRIM(c.group_name) = '' OR c.group_name = 'بدون گروه' THEN 'بدون گروه' ELSE c.group_name END,
 		COUNT(*),
 		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(sv.price_toman, 0) ELSE 0 END)
 		FROM bookings b

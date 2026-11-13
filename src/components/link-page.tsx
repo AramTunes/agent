@@ -34,7 +34,7 @@ import {
   Youtube,
 } from "lucide-react";
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties } from "react";
-import { blockRadius, pageBackground, resolveTheme, type PageDesign } from "@/lib/page-design";
+import { blockRadius, buttonChrome, pageBackground, resolveTheme, type PageDesign } from "@/lib/page-design";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { PageMark } from "@/lib/page-avatar";
@@ -209,7 +209,7 @@ async function sharePage(url: string, name: string) {
   }
 }
 
-type Face = { card: string; text: string; page: string; muted: string; radius: string; layout: "list" | "card"; columns: 1 | 2 };
+type Face = { card: string; text: string; page: string; muted: string; radius: string; layout: "list" | "card"; columns: 1 | 2; chrome: CSSProperties };
 const FaceContext = createContext<Face | null>(null);
 
 function faceFrom(design: PageDesign, tokens: ReturnType<typeof resolveTheme>): Face {
@@ -222,6 +222,7 @@ function faceFrom(design: PageDesign, tokens: ReturnType<typeof resolveTheme>): 
     radius: blockRadius(design),
     layout: design.layout,
     columns: design.columns,
+    chrome: buttonChrome(design, tokens),
   };
 }
 
@@ -233,8 +234,8 @@ function useRow() {
   const card = face.layout === "card";
   return {
     face,
-    className: card ? "flex aspect-square w-full flex-col items-center justify-center gap-2 overflow-hidden p-3 text-center" : "flex w-full items-center gap-3.5 px-4 py-3.5 text-start",
-    style: { background: face.card, color: face.text, borderRadius: face.radius } as CSSProperties,
+    className: card ? "flex aspect-square w-full flex-col items-center justify-center gap-2 p-3 text-center" : "flex w-full items-center gap-3.5 px-4 py-3.5 text-start",
+    style: face.chrome,
   };
 }
 
@@ -321,12 +322,13 @@ export function CustomerLink({
               const card = design?.layout === "card";
               const radius = face?.radius;
               return (
-                <li key={block.id} data-block-id={block.id} data-block-label={heading} className={cn("overflow-hidden", card ? "aspect-square" : "")} style={row.style}>
+                <li key={block.id} data-block-id={block.id} data-block-label={heading} className={cn(card ? "aspect-square" : "")} style={row.style}>
                   {block.image && !card ? <img src={block.image} alt="" className="h-40 w-full object-cover" style={radius ? { borderRadius: radius } : undefined} /> : null}
                   <Link
                     to="/b/$slug/$page"
                     params={{ slug, page: path }}
-                    className={card ? "relative flex h-full w-full flex-col items-center justify-center gap-2 p-3 text-center" : "flex w-full items-center gap-3.5 px-4 py-3.5 text-start"}
+                    className={card ? "relative flex h-full w-full flex-col items-center justify-center gap-2 overflow-hidden p-3 text-center" : "flex w-full items-center gap-3.5 px-4 py-3.5 text-start"}
+                    style={card ? { borderRadius: radius } : undefined}
                   >
                     {card && block.image ? <img src={block.image} alt="" className="absolute inset-0 h-full w-full object-cover" /> : null}
                     {card && block.image ? <span className="absolute inset-0 bg-black/35" /> : null}
@@ -379,8 +381,8 @@ function useRowFrom(face: Face | null) {
   }
   const card = face.layout === "card";
   return {
-    className: card ? "flex aspect-square w-full flex-col items-center justify-center gap-2 overflow-hidden p-3 text-center" : "flex w-full items-center gap-3.5 px-4 py-3.5 text-start",
-    style: { background: face.card, color: face.text, borderRadius: face.radius } as CSSProperties,
+    className: card ? "flex aspect-square w-full flex-col items-center justify-center gap-2 p-3 text-center" : "flex w-full items-center gap-3.5 px-4 py-3.5 text-start",
+    style: face.chrome,
   };
 }
 
@@ -774,7 +776,7 @@ function SocialIcons({ items }: { items: ContactItem[] }) {
   return (
     <div className="flex flex-wrap justify-center gap-2.5">
       {items.map((item) => (
-        <a key={item.id} href={socialHref(item)} target={item.kind === "phone" || item.kind === "email" ? undefined : "_blank"} rel="noreferrer" aria-label={item.title?.trim() || socialKind(item.kind).label} className={cn("grid size-12 place-items-center rounded-full border", face ? "border-current" : "border-white/15 text-white")} style={face ? { color: face.page } : undefined}>
+        <a key={item.id} href={socialHref(item)} target={item.kind === "phone" || item.kind === "email" ? undefined : "_blank"} rel="noreferrer" aria-label={item.title?.trim() || socialKind(item.kind).label} className={cn("grid size-12 place-items-center", face ? "" : "rounded-full border border-white/15 text-white")} style={face ? { ...face.chrome, borderRadius: "999px" } : undefined}>
           <SocialMark kind={item.kind} />
         </a>
       ))}
@@ -786,7 +788,7 @@ function SocialFooter({ block }: { block: CustomerBlock }) {
   const items = block.items ?? [];
   const face = useContext(FaceContext);
   return (
-    <div className="mb-4 flex w-full max-w-sm overflow-hidden rounded-full" style={{ background: face?.card ?? "#1c1c1c", color: face?.text ?? "#fff" }}>
+    <div className="mb-4 flex w-full max-w-sm overflow-hidden" style={face ? { ...face.chrome, borderRadius: "999px" } : { background: "#1c1c1c", color: "#fff", borderRadius: "999px" }}>
       {items.map((item, index) => (
         <a
           key={item.id}

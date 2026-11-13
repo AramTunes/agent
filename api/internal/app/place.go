@@ -29,6 +29,8 @@ func (s *Service) CreateBooking(userID string, raw map[string]any) (any, error) 
 		return err
 	})
 	if err == nil {
+		s.remindDueLocked()
+		s.sendBookingReceipt(out, input.origin)
 		return out, nil
 	}
 	if !isUnique(err) {
@@ -47,14 +49,16 @@ func (s *Service) CreateBooking(userID string, raw map[string]any) (any, error) 
 	if lerr != nil {
 		return nil, lerr
 	}
-	return bookDTO(row, true), nil
+	out = bookDTO(row, true)
+	s.attachReceipt(out, id)
+	return out, nil
 }
 
 type bookInput struct {
-	businessID, serviceID, start, key, note string
-	staffID                                  string
-	manual                                   *struct{ name, phone string }
-	contact                                  *struct{ name, phone, email string }
+	businessID, serviceID, start, key, note, origin string
+	staffID                                         string
+	manual                                          *struct{ name, phone string }
+	contact                                         *struct{ name, phone, email string }
 }
 
 func parseBooking(raw map[string]any) (bookInput, error) {
@@ -88,6 +92,7 @@ func parseBooking(raw map[string]any) (bookInput, error) {
 		return in, err
 	}
 	in.start = booking.ISO(start)
+	in.origin = safeOrigin(mustString(raw, "origin"))
 	name, _ := textOf(raw, "customerName", 80, "")
 	if isTrue(raw, "manual") {
 		if len([]rune(name)) < 2 {
@@ -251,12 +256,15 @@ func (s *Service) place(tx *sql.Tx, userID string, in bookInput) (map[string]any
 	if in.manual != nil {
 		source = "manual"
 	}
+	token := newID()
+	var custName, custPhone string
+	_ = tx.QueryRow(`SELECT name, phone FROM customers WHERE id = ?`, customerID).Scan(&custName, &custPhone)
 	_, err = tx.Exec(`INSERT INTO bookings (
 		id, business_id, branch_id, service_id, staff_id, customer_id, customer_user_id, created_by_user_id,
-		starts_at, ends_at, buffer_until, status, source, idempotency_key, note, created_at, updated_at
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?)`,
+		starts_at, ends_at, buffer_until, status, source, idempotency_key, note, created_at, updated_at, customer_name, customer_phone, receipt_token
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,?,?)`,
 		bookingID, b.ID, branchID, in.serviceID, chosen, customerID, custUser, userID,
-		booking.ISO(start), booking.ISO(ends), booking.ISO(bufferUntil), source, in.key, in.note, now, now)
+		booking.ISO(start), booking.ISO(ends), booking.ISO(bufferUntil), source, in.key, in.note, now, now, custName, custPhone, token)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +279,9 @@ func (s *Service) place(tx *sql.Tx, userID string, in bookInput) (map[string]any
 	if err != nil {
 		return nil, err
 	}
-	return bookDTO(row, true), nil
+	out := bookDTO(row, true)
+	out["receiptToken"] = token
+	return out, nil
 }
 
 func (s *Service) SetStatus(userID string, raw map[string]any) (any, error) {
@@ -451,7 +461,7 @@ func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
 		if err != sql.ErrNoRows {
 			return err
 		}
-		res, err := tx.Exec(`UPDATE bookings SET staff_id=?, starts_at=?, ends_at=?, buffer_until=?, service_id=?, branch_id=?, updated_at=? WHERE id=? AND business_id=? AND status IN ('confirmed','pending')`,
+		res, err := tx.Exec(`UPDATE bookings SET staff_id=?, starts_at=?, ends_at=?, buffer_until=?, service_id=?, branch_id=?, reminded_at='', updated_at=? WHERE id=? AND business_id=? AND status IN ('confirmed','pending')`,
 			chosen, booking.ISO(start), booking.ISO(ends), booking.ISO(bufferUntil), row.ServiceID, branchID, s.now().UTC().Format(time.RFC3339), bookingID, b.ID)
 		if err != nil {
 			return err
@@ -470,25 +480,28 @@ func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
 		out = bookDTO(next, role != "" || isCustomer)
 		return nil
 	})
+	if err == nil {
+		s.remindDueLocked()
+	}
 	return out, err
 }
 
 func (s *Service) Notifications(userID string) (any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id, title, body, kind, channel, read_at, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 40`, userID)
+	rows, err := s.db.Query(`SELECT id, title, body, kind, COALESCE(booking_id, ''), channel, read_at, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 80`, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, title, body, kind, channel, created string
+		var id, title, body, kind, ref, channel, created string
 		var read sql.NullString
-		if err := rows.Scan(&id, &title, &body, &kind, &channel, &read, &created); err != nil {
+		if err := rows.Scan(&id, &title, &body, &kind, &ref, &channel, &read, &created); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": id, "title": title, "body": body, "kind": kind, "channel": channel, "read": read.Valid, "createdAt": created})
+		out = append(out, map[string]any{"id": id, "title": title, "body": body, "kind": kind, "ref": ref, "channel": channel, "read": read.Valid, "createdAt": created})
 	}
 	return out, rows.Err()
 }

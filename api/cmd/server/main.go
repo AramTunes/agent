@@ -32,6 +32,7 @@ func main() {
 	}
 	defer db.Close()
 	srv := &httpapi.Server{App: app.New(db)}
+	go srv.App.RunReminders()
 	log.Printf("agent api %s", addr)
 	if strings.HasPrefix(addr, "/") || strings.HasPrefix(addr, "unix:") {
 		sock := strings.TrimPrefix(addr, "unix:")

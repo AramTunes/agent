@@ -139,6 +139,12 @@ export const publicBusinessFn = (args: { data: { slug?: string; track?: boolean 
   return get<any>(`/api/v1/business/${slug}${query ? `?${query}` : ""}`);
 };
 export const placeMenuOrderFn = (args: { data: unknown }) => post<any>("/api/v1/menu-orders", args.data);
+export const receiptFn = (token: string) => get<any>(`/api/v1/receipts/${encodeURIComponent(token)}`);
+export const ordersFn = (args: { data: unknown }) => post<any>("/api/v1/orders/list", args.data);
+export const setOrderStatusFn = (args: { data: unknown }) => post<any>("/api/v1/orders/status", args.data);
+export const setOrderWhenFn = (args: { data: unknown }) => post<any>("/api/v1/orders/when", args.data);
+export const shopHoursFn = (args: { data: unknown }) => post<any>("/api/v1/shop-hours/get", args.data);
+export const saveShopHoursFn = (args: { data: unknown }) => post<any>("/api/v1/shop-hours/save", args.data);
 
 function visitorId() {
   if (typeof window === "undefined") return "";
@@ -164,7 +170,7 @@ function visitMeta() {
 }
 export const availabilityFn = (args: { data: Record<string, unknown> }) => {
   const q = new URLSearchParams();
-  for (const key of ["businessId", "serviceId", "staffId", "day"]) {
+  for (const key of ["businessId", "serviceId", "staffId", "day", "exceptBookingId"]) {
     if (args.data[key] != null) q.set(key, String(args.data[key]));
   }
   return get<any>(`/api/v1/availability?${q.toString()}`);
@@ -204,7 +210,9 @@ export const rescheduleBookingFn = (args: { data: unknown }) => post<any>("/api/
 export const myBookingsFn = () => get<any>("/api/v1/me/bookings");
 export const businessBookingsFn = (args: { data: unknown }) => post<any>("/api/v1/business-bookings", args.data);
 export const customersFn = (args: { data: unknown }) => post<any>("/api/v1/customers/list", args.data);
+export const customerFileFn = (args: { data: unknown }) => post<any>("/api/v1/customers/file", args.data);
 export const saveCustomerFn = (args: { data: unknown }) => post<any>("/api/v1/customers", args.data);
+export const deleteCustomerFn = (args: { data: unknown }) => post<any>("/api/v1/customers/delete", args.data);
 export const saveCustomerGroupFn = (args: { data: unknown }) => post<any>("/api/v1/customer-groups", args.data);
 export const renameCustomerGroupFn = (args: { data: unknown }) => post<any>("/api/v1/customer-groups/rename", args.data);
 export const deleteCustomerGroupFn = (args: { data: unknown }) => post<any>("/api/v1/customer-groups/delete", args.data);
@@ -212,6 +220,10 @@ export const dashboardFn = (args: { data: unknown }) => post<any>("/api/v1/dashb
 export const reportsFn = (args: { data: unknown }) => post<any>("/api/v1/reports", args.data);
 export const notificationsFn = () => get<any>("/api/v1/notifications");
 export const markReadFn = (args: { data: unknown }) => post<any>("/api/v1/notifications/read", args.data);
+export const supportTicketsFn = () => get<any>("/api/v1/support/tickets");
+export const createSupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets", args.data);
+export const replySupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets/reply", args.data);
+export const closeSupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets/close", args.data);
 export const adminOverviewFn = () => get<any>("/api/v1/admin/overview");
 export const adminUsersFn = (args: { data: unknown }) => post<any>("/api/v1/admin/users", args.data);
 export const adminBusinessesFn = (args: { data: unknown }) => post<any>("/api/v1/admin/businesses", args.data);

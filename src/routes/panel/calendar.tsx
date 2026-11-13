@@ -9,7 +9,8 @@ import { JalaliCalendar } from "@/components/jalali-calendar";
 import { AppWindow, useIsDesktop } from "@/components/panel-window";
 import { TimeWheel } from "@/components/time-wheel";
 import { WeekBoard } from "@/components/week-board";
-import { Button, Empty, Field, TextInput, Area, MobileInput } from "@/components/ui";
+import { Button, DialogActions, Empty, Field, TextInput, Area } from "@/components/ui";
+import { PhoneInput } from "@/components/phone-input";
 import { Combobox } from "@/components/ui/combobox";
 import { availabilityFn, createBookingFn, customersFn, manageBusinessFn, saveCustomerFn } from "@/lib/api";
 import { pickDefault, readBookingDefaults, rememberBookingDefaults } from "@/lib/booking-defaults";
@@ -37,7 +38,9 @@ function CalendarPage() {
     let live = true;
     manageBusinessFn({ data: { businessId } }).then((res) => {
       if (!live || !res.ok) return;
-      const hours = (res.data.staff ?? []).flatMap((person: { weekly?: { weekday: number; startMin: number; endMin: number }[] }) => person.weekly ?? []);
+      const hours = (res.data.staff ?? [])
+        .filter((person: { active?: boolean }) => person.active !== false)
+        .flatMap((person: { weekly?: { weekday: number; startMin: number; endMin: number }[] }) => person.weekly ?? []);
       setZone(res.data.timezone || "Asia/Tehran");
       setWeekly(hours);
       setReady(true);
@@ -370,13 +373,13 @@ function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone
           <Field label="نام مشتری">
             <Combobox options={customers.map((item) => item.label)} value={customerName} onChange={pickCustomer} placeholder="نام مشتری را بنویسید" emptyText="مشتری تازه‌ای است؛ بقیه اطلاعات را وارد کنید" />
           </Field>
-          <Field label="شماره موبایل"><MobileInput value={phone} onChange={setPhone} /></Field>
+          <Field label="شماره موبایل"><PhoneInput value={phone} onChange={setPhone} /></Field>
           <CustomerGroupField businessId={businessId} groups={groups} value={group} onChange={(value) => { setGroup(value); rememberBookingDefaults(businessId, { group: value }); }} onGroups={setGroups} />
           <Field label="یادداشت"><Area value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
-          <div className="flex gap-2">
+          <DialogActions>
             <Button type="button" variant="quiet" onClick={onClose}>انصراف</Button>
             <Button type="submit" disabled={pending || !start || (known?.name || customerName).trim().length < 2 || !serviceId || !staffId}>{pending ? "در حال ثبت" : "ثبت نوبت"}</Button>
-          </div>
+          </DialogActions>
         </form>
       </AppWindow>
       {picker === "date" ? (
@@ -466,10 +469,10 @@ function CustomerDialog({ businessId, onClose }: { businessId: string; onClose: 
         }}
       >
         <CustomerFields businessId={businessId} draft={form} groups={groups} addresses={addresses} onChange={setForm} onGroups={setGroups} />
-        <div className="flex gap-2">
+        <DialogActions>
           <Button type="button" variant="quiet" onClick={onClose}>انصراف</Button>
           <Button type="submit" disabled={pending}>{pending ? "در حال ثبت" : "اضافه کردن مشتری جدید"}</Button>
-        </div>
+        </DialogActions>
       </form>
     </AppWindow>
   );

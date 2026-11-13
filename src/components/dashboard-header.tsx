@@ -3,7 +3,8 @@ import { Check, ChevronDown, Eye, LifeBuoy, Palette, Plus, QrCode, Settings, Spa
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import type { Membership } from "@/components/account";
-import { Button, Field, TextInput } from "@/components/ui";
+import { Button, DialogActions, Field, TextInput } from "@/components/ui";
+import { Select } from "@/components/ui/select";
 import { categoriesFn, createBusinessFn } from "@/lib/api";
 import { assignRandomPageAvatar, PageMark } from "@/lib/page-avatar";
 
@@ -179,14 +180,16 @@ export function CreateBusinessDialog({ onClose, onDone }: { onClose: () => void;
         <Field label="شهر"><TextInput value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
         <Field label="تلفن"><TextInput dir="ltr" className="text-left" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
         <Field label="دسته">
-          <select className="min-h-11 rounded-xl border border-line bg-card px-3" value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
-            {categories.map((cat) => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-          </select>
+          <Select
+            value={form.categoryId}
+            onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
+            options={categories.map((cat) => ({ value: cat.id, label: cat.name }))}
+          />
         </Field>
-        <div className="flex gap-2">
+        <DialogActions>
           <Button type="button" variant="quiet" onClick={onClose}>انصراف</Button>
           <Button type="submit" variant="signup" disabled={pending}>{pending ? "در حال ساخت" : "ساخت"}</Button>
-        </div>
+        </DialogActions>
       </form>
     </div>
   );

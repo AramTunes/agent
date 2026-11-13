@@ -19,10 +19,10 @@ type querier interface {
 
 type bizRow struct {
 	ID, Owner, Name, Slug, Description, City, Address, Phone, Timezone, Status, Reason string
-	CategoryID                                                                          sql.NullString
-	CancelBefore, MinLead, Horizon, Step                                                int
-	AllowAny, IsDemo                                                                    bool
-	Avatar, PageBlocks                                                                  string
+	CategoryID                                                                         sql.NullString
+	CancelBefore, MinLead, Horizon, Step, RemindHours                                  int
+	AllowAny, IsDemo                                                                   bool
+	Avatar, PageBlocks                                                                 string
 }
 
 func scanBiz(row interface{ Scan(...any) error }) (bizRow, error) {
@@ -35,7 +35,7 @@ func scanBiz(row interface{ Scan(...any) error }) (bizRow, error) {
 	return b, err
 }
 
-const bizCols = `id, owner_user_id, name, slug, description, category_id, city, address, phone, timezone, status, status_reason, cancel_before_minutes, min_lead_minutes, max_horizon_days, slot_step_minutes, allow_any_staff, is_demo, avatar, page_blocks`
+const bizCols = `id, owner_user_id, name, slug, description, category_id, city, address, phone, timezone, status, status_reason, cancel_before_minutes, min_lead_minutes, max_horizon_days, slot_step_minutes, allow_any_staff, is_demo, avatar, page_blocks, remind_hours`
 
 func loadBiz(q querier, where string, arg any) (bizRow, error) {
 	var b bizRow
@@ -43,7 +43,7 @@ func loadBiz(q querier, where string, arg any) (bizRow, error) {
 	var allow, demo int
 	err := q.QueryRow(`SELECT `+bizCols+` FROM businesses WHERE `+where, arg).Scan(
 		&b.ID, &b.Owner, &b.Name, &b.Slug, &b.Description, &cat, &b.City, &b.Address, &b.Phone, &b.Timezone,
-		&b.Status, &b.Reason, &b.CancelBefore, &b.MinLead, &b.Horizon, &b.Step, &allow, &demo, &b.Avatar, &b.PageBlocks,
+		&b.Status, &b.Reason, &b.CancelBefore, &b.MinLead, &b.Horizon, &b.Step, &allow, &demo, &b.Avatar, &b.PageBlocks, &b.RemindHours,
 	)
 	if err == sql.ErrNoRows {
 		return b, fail(404, "NOT_FOUND", "کسب‌وکار پیدا نشد")
@@ -367,7 +367,7 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 	}
 	brows.Close()
 
-	svcSQL := `SELECT id, name, description, duration_minutes, buffer_minutes, price_toman, active FROM services WHERE business_id = ?`
+	svcSQL := `SELECT id, name, description, duration_minutes, buffer_minutes, price_toman, active, COALESCE(photo, '') FROM services WHERE business_id = ?`
 	if !manage {
 		svcSQL += ` AND active = 1`
 	}
@@ -378,15 +378,19 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 		return nil, err
 	}
 	for srows.Next() {
-		var id, name, desc string
+		var id, name, desc, photo string
 		var dur, buf, price, active int
-		if err := srows.Scan(&id, &name, &desc, &dur, &buf, &price, &active); err != nil {
+		if err := srows.Scan(&id, &name, &desc, &dur, &buf, &price, &active, &photo); err != nil {
 			srows.Close()
 			return nil, err
 		}
-		services = append(services, map[string]any{
+		row := map[string]any{
 			"id": id, "name": name, "description": desc, "durationMinutes": dur, "bufferMinutes": buf, "priceToman": price, "active": active != 0,
-		})
+		}
+		if photo != "" {
+			row["photo"] = photo
+		}
+		services = append(services, row)
 	}
 	srows.Close()
 
@@ -397,7 +401,7 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 	staffSQL += ` ORDER BY name`
 	type person struct {
 		id, name, title, photo, phone, userID, invite string
-		active                                         bool
+		active                                        bool
 	}
 	var people []person
 	prows, err := q.Query(staffSQL, b.ID)
@@ -476,9 +480,12 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 			rest = []spanJSON{}
 		}
 		row := map[string]any{
-			"id": p.id, "name": p.name, "title": p.title, "active": p.active, "phone": p.phone,
-			"pending": p.userID == "" && p.phone != "",
+			"id": p.id, "name": p.name, "title": p.title, "active": p.active,
+			"pending":    p.userID == "" && p.phone != "",
 			"serviceIds": svcIDs, "weekly": weekly, "breaks": rest,
+		}
+		if manage {
+			row["phone"] = p.phone
 		}
 		if manage && p.userID == "" && p.invite != "" {
 			row["inviteToken"] = p.invite
@@ -490,29 +497,31 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 	}
 
 	holidays := []map[string]any{}
-	if manage {
-		orows, err := q.Query(`SELECT id, staff_id, date_local, note FROM holidays WHERE business_id = ? ORDER BY date_local`, b.ID)
-		if err != nil {
+	orows, err := q.Query(`SELECT id, staff_id, date_local, note FROM holidays WHERE business_id = ? ORDER BY date_local`, b.ID)
+	if err != nil {
+		return nil, err
+	}
+	for orows.Next() {
+		var id, date, note string
+		var staffID sql.NullString
+		if err := orows.Scan(&id, &staffID, &date, &note); err != nil {
+			orows.Close()
 			return nil, err
 		}
-		for orows.Next() {
-			var id, date, note string
-			var staffID sql.NullString
-			if err := orows.Scan(&id, &staffID, &date, &note); err != nil {
-				orows.Close()
-				return nil, err
-			}
-			var sid any
-			if staffID.Valid && staffID.String != "" {
-				sid = staffID.String
-			}
-			if len(date) >= 10 {
-				date = date[:10]
-			}
-			holidays = append(holidays, map[string]any{"id": id, "staffId": sid, "date": date, "note": note})
+		var sid any
+		if staffID.Valid && staffID.String != "" {
+			sid = staffID.String
 		}
-		orows.Close()
+		if len(date) >= 10 {
+			date = date[:10]
+		}
+		row := map[string]any{"id": id, "staffId": sid, "date": date}
+		if manage {
+			row["note"] = note
+		}
+		holidays = append(holidays, row)
 	}
+	orows.Close()
 
 	catID := ""
 	if b.CategoryID.Valid {
@@ -543,10 +552,11 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 		"categoryId": catID, "categoryName": catName, "city": b.City, "address": b.Address, "phone": b.Phone,
 		"timezone": b.Timezone, "status": b.Status, "statusReason": reason,
 		"cancelBeforeMinutes": b.CancelBefore, "minLeadMinutes": b.MinLead, "maxHorizonDays": b.Horizon,
-		"slotStepMinutes": b.Step, "allowAnyStaff": b.AllowAny, "isDemo": b.IsDemo, "avatar": b.Avatar,
+		"slotStepMinutes": b.Step, "allowAnyStaff": b.AllowAny, "isDemo": b.IsDemo, "avatar": b.Avatar, "remindHours": b.RemindHours,
 		"pageBlocks": pageBlocksValue(b.PageBlocks),
-		"branches": branches, "services": services, "staff": staff, "holidays": holidays,
+		"branches":   branches, "services": services, "staff": staff, "holidays": holidays,
 		"customerGroups": groups,
+		"shopHours":      s.shopHours(q, b.ID),
 	}, nil
 }
 
@@ -567,10 +577,11 @@ func (s *Service) me(userID string) (map[string]any, error) {
 	}
 	var display, phone, avatar string
 	var username, pageFor, pageName, activity sql.NullString
+	var hasPassword int
 	err := s.db.QueryRow(`
-		SELECT p.display_name, p.phone, p.username, p.page_for, p.page_name, c.name, p.avatar
+		SELECT p.display_name, p.phone, p.username, p.page_for, p.page_name, c.name, p.avatar, p.has_password
 		FROM profiles p LEFT JOIN categories c ON c.id = p.activity_id
-		WHERE p.user_id = ?`, userID).Scan(&display, &phone, &username, &pageFor, &pageName, &activity, &avatar)
+		WHERE p.user_id = ?`, userID).Scan(&display, &phone, &username, &pageFor, &pageName, &activity, &avatar, &hasPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +621,7 @@ func (s *Service) me(userID string) (map[string]any, error) {
 	}
 	return map[string]any{
 		"profile": map[string]any{
-			"displayName": display, "phone": phone, "email": email, "avatar": avatar,
+			"displayName": display, "phone": phone, "email": email, "avatar": avatar, "hasPassword": hasPassword != 0,
 			"username": username.String, "pageFor": pageFor.String, "pageName": pageName.String, "activityName": activity.String,
 		},
 		"isAdmin": admin, "canClaim": !admin && admins == 0, "unread": unread, "memberships": memberships,
@@ -624,20 +635,13 @@ func (s *Service) UpdateProfile(userID string, raw map[string]any) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	phone, err := textOf(raw, "phone", 20, "")
-	if err != nil {
-		return nil, err
-	}
 	if len([]rune(name)) < 2 {
 		return nil, fail(400, "VALIDATION", "نام را وارد کنید")
 	}
-	if _, err := s.db.Exec(`UPDATE profiles SET display_name = ?, phone = ? WHERE user_id = ?`, name, phone, userID); err != nil {
-		if isUnique(err) {
-			return nil, fail(409, "CONFLICT", "این شماره برای حساب دیگری است")
-		}
+	if _, err := s.db.Exec(`UPDATE profiles SET display_name = ? WHERE user_id = ?`, name, userID); err != nil {
 		return nil, err
 	}
-	_, _ = s.db.Exec(`UPDATE users SET phone = ?, name = ? WHERE id = ?`, phone, name, userID)
+	_, _ = s.db.Exec(`UPDATE users SET name = ? WHERE id = ?`, name, userID)
 	return s.me(userID)
 }
 
@@ -799,11 +803,24 @@ func (s *Service) RegisterPerson(raw map[string]any) (any, error) {
 	} else if acc != nil {
 		return nil, fail(409, "CONFLICT", "این شماره قبلاً ثبت شده است. وارد شوید")
 	}
+	password := mustString(raw, "password")
+	confirm := mustString(raw, "confirm")
+	hasPassword := 0
+	secret := newID() + "Aa9!"
+	if strings.TrimSpace(password) != "" || strings.TrimSpace(confirm) != "" {
+		if len(password) < 8 {
+			return nil, fail(400, "VALIDATION", "رمز باید حداقل ۸ نویسه باشد")
+		}
+		if password != confirm {
+			return nil, fail(400, "VALIDATION", "تکرار رمز با رمز یکی نیست")
+		}
+		secret = password
+		hasPassword = 1
+	}
 	if err := s.consumeCode(phone, "signup", code); err != nil {
 		return nil, err
 	}
 	userID := newID()
-	secret := newID() + "Aa9!"
 	hash, err := hashPassword(secret)
 	if err != nil {
 		return nil, err
@@ -814,8 +831,8 @@ func (s *Service) RegisterPerson(raw map[string]any) (any, error) {
 	if err != nil {
 		return nil, fail(400, "AUTH", "حساب ساخته نشد. دوباره تلاش کنید.")
 	}
-	if _, err := s.db.Exec(`INSERT INTO profiles (user_id, display_name, phone, has_password, created_at) VALUES (?,?,?,0,?)`,
-		userID, name, phone, now); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO profiles (user_id, display_name, phone, has_password, created_at) VALUES (?,?,?,?,?)`,
+		userID, name, phone, hasPassword, now); err != nil {
 		_, _ = s.db.Exec(`DELETE FROM users WHERE id = ?`, userID)
 		return nil, fail(400, "AUTH", "حساب ساخته نشد. دوباره تلاش کنید.")
 	}
@@ -955,7 +972,7 @@ func (s *Service) CreateDemo(userID string) (any, error) {
 		}
 		id = bid
 		services := []struct {
-			name       string
+			name            string
 			dur, buf, price int
 		}{{"اصلاح مو", 45, 10, 350000}, {"اصلاح ریش", 30, 5, 180000}, {"رنگ مو", 90, 15, 900000}}
 		var serviceIDs []string

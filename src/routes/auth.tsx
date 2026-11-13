@@ -30,6 +30,7 @@ function AuthPage() {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [hasPassword, setHasPassword] = useState(false);
 
   async function enter(token: string) {
     await adoptSession(token);
@@ -52,6 +53,7 @@ function AuthPage() {
       setStep("phone");
       return;
     }
+    setHasPassword(Boolean(res.data.hasPassword));
     if (!res.data.hasPassword) {
       const codeRes = await sendPhoneCodeFn({ data: { phone, purpose: "login" } });
       setPending(false);
@@ -167,7 +169,10 @@ function AuthPage() {
               </Field>
               {error ? <ErrorNote>{error}</ErrorNote> : null}
               <Button type="submit" disabled={pending || code.length < 6}>{pending ? "در حال ورود" : "ورود"}</Button>
-              <button type="button" className="text-sm text-muted" onClick={() => setStep("password")}>بازگشت</button>
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                <button type="button" className="font-semibold text-ink" disabled={pending} onClick={() => void requestCode("login")}>ارسال دوباره</button>
+                <button type="button" className="text-muted" onClick={() => { setError(""); setCode(""); setStep(hasPassword ? "password" : "phone"); }}>بازگشت</button>
+              </div>
             </form>
           ) : null}
 
@@ -191,7 +196,10 @@ function AuthPage() {
               )}
               {error ? <ErrorNote>{error}</ErrorNote> : null}
               <Button type="submit" disabled={pending || code.trim().length < 6}>{pending ? "در حال ذخیره" : "تأیید و ورود"}</Button>
-              <button type="button" className="text-sm text-muted" onClick={() => setStep("password")}>بازگشت</button>
+              <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                <button type="button" className="font-semibold text-ink" disabled={pending} onClick={() => void requestCode("reset")}>ارسال دوباره</button>
+                <button type="button" className="text-muted" onClick={() => { setError(""); setStep("password"); }}>بازگشت</button>
+              </div>
             </form>
           ) : null}
         </Card>

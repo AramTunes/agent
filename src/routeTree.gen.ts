@@ -34,6 +34,7 @@ import { Route as PanelReportsRouteImport } from './routes/panel/reports'
 import { Route as PanelServicesRouteImport } from './routes/panel/services'
 import { Route as PanelSettingsRouteImport } from './routes/panel/settings'
 import { Route as PanelStaffRouteImport } from './routes/panel/staff'
+import { Route as RTokenRouteImport } from './routes/r/$token'
 import { Route as BSlugIndexRouteImport } from './routes/b/$slug/index'
 import { Route as BSlugPageRouteImport } from './routes/b/$slug/$page'
 import { Route as BSlugBookRouteImport } from './routes/b/$slug/book'
@@ -163,6 +164,11 @@ const PanelStaffRoute = PanelStaffRouteImport.update({
   path: '/staff',
   getParentRoute: () => PanelRouteRoute,
 } as any)
+const RTokenRoute = RTokenRouteImport.update({
+  id: '/r/$token',
+  path: '/r/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BSlugIndexRoute = BSlugIndexRouteImport.update({
   id: '/b/$slug/',
   path: '/b/$slug/',
@@ -203,6 +209,7 @@ export interface FileRoutesByFullPath {
   '/panel/services': typeof PanelServicesRoute
   '/panel/settings': typeof PanelSettingsRoute
   '/panel/staff': typeof PanelStaffRoute
+  '/r/$token': typeof RTokenRoute
   '/admin/': typeof AdminIndexRoute
   '/panel/': typeof PanelIndexRoute
   '/b/$slug/$page': typeof BSlugPageRoute
@@ -231,6 +238,7 @@ export interface FileRoutesByTo {
   '/panel/services': typeof PanelServicesRoute
   '/panel/settings': typeof PanelSettingsRoute
   '/panel/staff': typeof PanelStaffRoute
+  '/r/$token': typeof RTokenRoute
   '/admin': typeof AdminIndexRoute
   '/panel': typeof PanelIndexRoute
   '/b/$slug/$page': typeof BSlugPageRoute
@@ -262,6 +270,7 @@ export interface FileRoutesById {
   '/panel/services': typeof PanelServicesRoute
   '/panel/settings': typeof PanelSettingsRoute
   '/panel/staff': typeof PanelStaffRoute
+  '/r/$token': typeof RTokenRoute
   '/admin/': typeof AdminIndexRoute
   '/panel/': typeof PanelIndexRoute
   '/b/$slug/$page': typeof BSlugPageRoute
@@ -294,6 +303,7 @@ export interface FileRouteTypes {
     | '/panel/services'
     | '/panel/settings'
     | '/panel/staff'
+    | '/r/$token'
     | '/admin/'
     | '/panel/'
     | '/b/$slug/$page'
@@ -322,6 +332,7 @@ export interface FileRouteTypes {
     | '/panel/services'
     | '/panel/settings'
     | '/panel/staff'
+    | '/r/$token'
     | '/admin'
     | '/panel'
     | '/b/$slug/$page'
@@ -352,6 +363,7 @@ export interface FileRouteTypes {
     | '/panel/services'
     | '/panel/settings'
     | '/panel/staff'
+    | '/r/$token'
     | '/admin/'
     | '/panel/'
     | '/b/$slug/$page'
@@ -370,6 +382,7 @@ export interface RootRouteChildren {
   StartRoute: typeof StartRoute
   SupportRoute: typeof SupportRoute
   JoinTokenRoute: typeof JoinTokenRoute
+  RTokenRoute: typeof RTokenRoute
   BSlugPageRoute: typeof BSlugPageRoute
   BSlugBookRoute: typeof BSlugBookRoute
   BSlugIndexRoute: typeof BSlugIndexRoute
@@ -552,6 +565,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PanelStaffRouteImport
       parentRoute: typeof PanelRouteRoute
     }
+    '/r/$token': {
+      id: '/r/$token'
+      path: '/r/$token'
+      fullPath: '/r/$token'
+      preLoaderRoute: typeof RTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/b/$slug/': {
       id: '/b/$slug/'
       path: '/b/$slug'
@@ -637,6 +657,7 @@ const rootRouteChildren: RootRouteChildren = {
   StartRoute: StartRoute,
   SupportRoute: SupportRoute,
   JoinTokenRoute: JoinTokenRoute,
+  RTokenRoute: RTokenRoute,
   BSlugPageRoute: BSlugPageRoute,
   BSlugBookRoute: BSlugBookRoute,
   BSlugIndexRoute: BSlugIndexRoute,

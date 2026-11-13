@@ -75,7 +75,7 @@ function JoinPage() {
               <Field label="کد تأیید"><OtpField value={code} onChange={setCode} /></Field>
               {error ? <ErrorNote>{error}</ErrorNote> : null}
               <div className="flex gap-2">
-                <Button type="button" variant="quiet" disabled={pending} onClick={() => void sendCode()}>{pending && !code ? "در حال ارسال" : "دریافت کد"}</Button>
+                <Button type="button" variant="quiet" disabled={pending} onClick={() => void sendCode()}>{shownCode ? "ارسال دوباره" : pending ? "در حال ارسال" : "دریافت کد"}</Button>
                 <Button type="submit" variant="signup" disabled={pending || code.trim().length < 6}>{pending ? "در حال تأیید" : "تأیید و ورود"}</Button>
               </div>
             </form>

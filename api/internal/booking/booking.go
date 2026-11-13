@@ -286,11 +286,8 @@ func DayAvailability(day string, loc *time.Location, now time.Time, durationMin,
 	if day < today || day > horizon {
 		return nil
 	}
-	var earliest *time.Time
-	if day == today {
-		e := now.Add(time.Duration(minLeadMinutes) * time.Minute)
-		earliest = &e
-	}
+	e := now.Add(time.Duration(minLeadMinutes) * time.Minute)
+	earliest := &e
 	grouped := map[string][]string{}
 	order := []string{}
 	for _, member := range staff {

@@ -683,17 +683,16 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
   const [imageOpen, setImageOpen] = useState(false);
   const [form, setForm] = useState<{ name: string; description: string; city: string; phone: string; address: string; categoryId: string; timezone: string; cancelBeforeMinutes: number; minLeadMinutes: number; maxHorizonDays: number; slotStepMinutes: number; allowAnyStaff: boolean } | null>(null);
   const [image, setImage] = useState("");
+  const [cleared, setCleared] = useState(false);
   const [pending, setPending] = useState(false);
   useEffect(() => {
     if (!businessId) return;
-    try {
-      setImage(localStorage.getItem(imageKey(businessId)) ?? "");
-    } catch {
-      setImage("");
-    }
     manageBusinessFn({ data: { businessId } }).then((res) => {
       if (!res.ok) return;
       const data = res.data;
+      const local = readPageAvatar(businessId, slug);
+      setImage(data.avatar || local || "");
+      setCleared(false);
       setForm({
         name: data.name ?? "",
         description: String(data.description ?? "").slice(0, 100),
@@ -709,7 +708,7 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
         allowAnyStaff: Boolean(data.allowAnyStaff),
       });
     });
-  }, [businessId]);
+  }, [businessId, slug]);
   if (!form) return <Skeleton className="h-40" />;
   return (
     <form
@@ -718,18 +717,25 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
         event.preventDefault();
         setPending(true);
         void (async () => {
-          const avatar = image ? await fitAvatar(image) : "";
-          try {
-            if (image) rememberPageAvatar(businessId, slug, image);
-            else {
+          const payload: Record<string, unknown> = { businessId, ...form, description: form.description.slice(0, 100) };
+          if (cleared) {
+            payload.avatar = "";
+            try {
               localStorage.removeItem(pageImageKey(businessId));
               if (slug) localStorage.removeItem(`agent.page-image.slug.${slug}`);
               window.dispatchEvent(new Event("agent-avatar"));
+            } catch {
+              toast.error("تصویر ذخیره نشد");
             }
-          } catch {
-            toast.error("تصویر ذخیره نشد");
+          } else if (image) {
+            payload.avatar = await fitAvatar(image);
+            try {
+              rememberPageAvatar(businessId, slug, image);
+            } catch {
+              toast.error("تصویر ذخیره نشد");
+            }
           }
-          const res = await updateBusinessFn({ data: { businessId, ...form, description: form.description.slice(0, 100), avatar } });
+          const res = await updateBusinessFn({ data: payload });
           setPending(false);
           if (!res.ok) {
             toast.error(res.error);
@@ -764,7 +770,8 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
         {imageOpen ? (
           <ImageDialog
             image={image}
-            onPick={setImage}
+            onPick={(next) => { setCleared(false); setImage(next); }}
+            onClear={() => { setCleared(true); setImage(""); }}
             onUpload={() => fileRef.current?.click()}
             onClose={() => setImageOpen(false)}
           />
@@ -808,7 +815,7 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
   );
 }
 
-function ImageDialog({ image, onPick, onUpload, onClose }: { image: string; onPick: (next: string) => void; onUpload: () => void; onClose: () => void }) {
+function ImageDialog({ image, onPick, onUpload, onClear, onClose }: { image: string; onPick: (next: string) => void; onUpload: () => void; onClear: () => void; onClose: () => void }) {
   if (typeof document === "undefined") return null;
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
@@ -844,7 +851,7 @@ function ImageDialog({ image, onPick, onUpload, onClose }: { image: string; onPi
             </div>
           </ScrollArea>
         </div>
-        <button type="button" className="text-sm font-semibold text-[#e11d2e]" onClick={() => onPick(readyAvatars[0].id)}>
+        <button type="button" className="text-sm font-semibold text-[#e11d2e]" onClick={onClear}>
           حذف تصویر آپلود شده
         </button>
         <button type="button" className="inline-flex h-11 items-center justify-center rounded-full border border-line bg-paper text-sm font-semibold text-ink" onClick={onClose}>

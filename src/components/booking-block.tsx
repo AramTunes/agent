@@ -3,6 +3,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type RefO
 import { toast } from "sonner";
 import { Switch } from "@/components/switch";
 import { Area, Field, Stepper, TextInput } from "@/components/ui";
+import { PhoneInput } from "@/components/phone-input";
 import { deleteServiceFn, deleteStaffFn, manageBusinessFn, saveScheduleFn, saveServiceFn, saveStaffFn } from "@/lib/api";
 import { fitImage } from "@/lib/fit-image";
 import { WEEKDAYS_FA, enDigits, faNum, minutesLabel, toman } from "@/lib/booking/fa";
@@ -18,15 +19,17 @@ type ServiceRow = {
 };
 
 type Range = { start: string; end: string };
-type DayPlan = { weekday: number; enabled: boolean; ranges: Range[] };
+type DayPlan = { weekday: number; enabled: boolean; ranges: Range[]; breakStart: string; breakEnd: string };
 type Person = {
   id: string;
   name: string;
   title: string;
+  phone?: string;
   active: boolean;
   photo?: string;
   serviceIds: string[];
   weekly: { weekday: number; startMin: number; endMin: number }[];
+  breaks?: { weekday: number; startMin: number; endMin: number }[];
 };
 
 const dayOrder = [6, 0, 1, 2, 3, 4, 5];
@@ -44,11 +47,18 @@ function toMin(value: string) {
   return h * 60 + m;
 }
 
-function plansOf(weekly: Person["weekly"] | null): DayPlan[] {
+function plansOf(weekly: Person["weekly"] | null, breaks: Person["breaks"] | null): DayPlan[] {
   return dayOrder.map((weekday) => {
     const ranges = (weekly ?? []).filter((item) => item.weekday === weekday).map((item) => ({ start: pad(item.startMin), end: pad(item.endMin) }));
+    const rest = (breaks ?? []).find((item) => item.weekday === weekday);
     const enabled = weekly ? ranges.length > 0 : weekday !== 5;
-    return { weekday, enabled, ranges: ranges.length ? ranges : [{ start: "09:00", end: "18:00" }] };
+    return {
+      weekday,
+      enabled,
+      ranges: ranges.length ? ranges : [{ start: "09:00", end: "18:00" }],
+      breakStart: rest ? pad(rest.startMin) : "",
+      breakEnd: rest ? pad(rest.endMin) : "",
+    };
   });
 }
 
@@ -378,7 +388,7 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
   const [services, setServices] = useState<ServiceRow[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [draft, setDraft] = useState<Person | null>(null);
-  const [days, setDays] = useState<DayPlan[]>(plansOf(null));
+  const [days, setDays] = useState<DayPlan[]>(plansOf(null, null));
   const [day, setDay] = useState(6);
   const [saving, setSaving] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
@@ -398,13 +408,13 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
   }, [businessId]);
 
   function openNew() {
-    setDraft({ id: "", name: "", title: "", active: true, photo: "", serviceIds: services.filter((item) => item.active).map((item) => item.id), weekly: [] });
-    setDays(plansOf(null));
+    setDraft({ id: "", name: "", title: "", phone: "", active: true, photo: "", serviceIds: services.filter((item) => item.active).map((item) => item.id), weekly: [] });
+    setDays(plansOf(null, null));
     setDay(6);
   }
   function openEdit(person: Person) {
     setDraft(person);
-    setDays(plansOf(person.weekly));
+    setDays(plansOf(person.weekly, person.breaks));
     setDay(6);
   }
 
@@ -416,6 +426,10 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
     }
     if (draft.name.trim().length < 2) {
       toast.error("نام پرسنل را وارد کنید");
+      return false;
+    }
+    if (!(draft.phone ?? "").replace(/\D/g, "")) {
+      toast.error("شماره موبایل پرسنل را وارد کنید");
       return false;
     }
     if (draft.serviceIds.length === 0) {
@@ -434,7 +448,8 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
         ...(draft.id ? { id: draft.id } : {}),
         name: draft.name.trim(),
         title: draft.title.trim(),
-        active: true,
+        phone: draft.phone ?? "",
+        active: draft.active,
         photo: draft.photo ?? "",
         serviceIds: draft.serviceIds,
       },
@@ -452,6 +467,8 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
           weekday: item.weekday,
           enabled: item.enabled,
           ranges: item.enabled ? item.ranges.map((range) => ({ startMin: toMin(range.start), endMin: toMin(range.end) })) : [],
+          breakStart: item.breakStart ? toMin(item.breakStart) : "",
+          breakEnd: item.breakEnd ? toMin(item.breakEnd) : "",
         })),
       },
     });
@@ -529,6 +546,13 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
           <Field label="عنوان شغلی">
             <TextInput value={draft.title} maxLength={80} placeholder="مثلاً استایلیست" onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
           </Field>
+          <Field label="شماره موبایل">
+            <PhoneInput value={draft.phone ?? ""} onChange={(phone) => setDraft({ ...draft, phone })} />
+          </Field>
+          <label className="flex min-h-11 items-center justify-between gap-3 text-sm">
+            <span>برای رزرو در دسترس باشد</span>
+            <Switch checked={draft.active} onCheckedChange={(active) => setDraft({ ...draft, active })} />
+          </label>
           <Field label="خدمات پرسنل">
             <div className="flex flex-wrap gap-2">
               {services.map((service) => {
@@ -584,6 +608,18 @@ const StaffStep = forwardRef<StepFlush, { businessId: string }>(function StaffSt
                     <Plus className="size-4" />
                     بازه جدید
                   </button>
+                ) : null}
+                {selected.enabled ? (
+                  <div className="flex items-center gap-2">
+                    <label className="grid flex-1 gap-1 text-xs text-muted">
+                      استراحت از
+                      <input type="time" dir="ltr" value={selected.breakStart} onChange={(event) => setDays(days.map((item) => item.weekday === selected.weekday ? { ...item, breakStart: event.target.value } : item))} className="min-h-11 rounded-xl border border-line bg-card px-3 text-left text-sm" />
+                    </label>
+                    <label className="grid flex-1 gap-1 text-xs text-muted">
+                      تا
+                      <input type="time" dir="ltr" value={selected.breakEnd} onChange={(event) => setDays(days.map((item) => item.weekday === selected.weekday ? { ...item, breakEnd: event.target.value } : item))} className="min-h-11 rounded-xl border border-line bg-card px-3 text-left text-sm" />
+                    </label>
+                  </div>
                 ) : null}
               </div>
             ) : null}

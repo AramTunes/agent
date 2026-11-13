@@ -96,13 +96,18 @@ func (s *Server) Handler() http.Handler {
 		s.send(w, func() (any, error) { return s.App.NoteBlock(r.PathValue("slug"), id, label) })
 	})
 	mux.HandleFunc("POST /api/v1/menu-orders", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.PlaceMenuOrder(body(r)) })
+		raw := body(r)
+		raw["origin"] = requestOrigin(r)
+		s.send(w, func() (any, error) { return s.App.PlaceMenuOrder(raw) })
+	})
+	mux.HandleFunc("GET /api/v1/receipts/{token}", func(w http.ResponseWriter, r *http.Request) {
+		s.send(w, func() (any, error) { return s.App.Receipt(r.PathValue("token")) })
 	})
 	mux.HandleFunc("GET /api/v1/availability", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		s.send(w, func() (any, error) {
 			return s.App.Availability(map[string]any{
-				"businessId": q.Get("businessId"), "serviceId": q.Get("serviceId"), "staffId": q.Get("staffId"), "day": q.Get("day"),
+				"businessId": q.Get("businessId"), "serviceId": q.Get("serviceId"), "staffId": q.Get("staffId"), "day": q.Get("day"), "exceptBookingId": q.Get("exceptBookingId"),
 			})
 		})
 	})
@@ -177,14 +182,30 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/schedule", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveSchedule(id, raw) }))
 	mux.HandleFunc("POST /api/v1/holidays", auth(func(id string, raw map[string]any) (any, error) { return s.App.AddHoliday(id, raw) }))
 	mux.HandleFunc("POST /api/v1/holidays/remove", auth(func(id string, raw map[string]any) (any, error) { return s.App.RemoveHoliday(id, raw) }))
-	mux.HandleFunc("POST /api/v1/bookings", auth(func(id string, raw map[string]any) (any, error) { return s.App.CreateBooking(id, raw) }))
+	mux.HandleFunc("POST /api/v1/bookings", func(w http.ResponseWriter, r *http.Request) {
+		id, err := s.App.UserID(bearer(r))
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		raw := body(r)
+		raw["origin"] = requestOrigin(r)
+		s.send(w, func() (any, error) { return s.App.CreateBooking(id, raw) })
+	})
 	mux.HandleFunc("POST /api/v1/bookings/status", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetStatus(id, raw) }))
 	mux.HandleFunc("POST /api/v1/bookings/resolve", auth(func(id string, raw map[string]any) (any, error) { return s.App.ResolveFollowup(id, raw) }))
 	mux.HandleFunc("POST /api/v1/bookings/reschedule", auth(func(id string, raw map[string]any) (any, error) { return s.App.Reschedule(id, raw) }))
 	mux.HandleFunc("GET /api/v1/me/bookings", auth(func(id string, _ map[string]any) (any, error) { return s.App.MyBookings(id) }))
 	mux.HandleFunc("POST /api/v1/business-bookings", auth(func(id string, raw map[string]any) (any, error) { return s.App.BusinessBookings(id, raw) }))
 	mux.HandleFunc("POST /api/v1/customers/list", auth(func(id string, raw map[string]any) (any, error) { return s.App.ListCustomers(id, raw) }))
+	mux.HandleFunc("POST /api/v1/orders/list", auth(func(id string, raw map[string]any) (any, error) { return s.App.ListOrders(id, raw) }))
+	mux.HandleFunc("POST /api/v1/orders/status", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetOrderStatus(id, raw) }))
+	mux.HandleFunc("POST /api/v1/orders/when", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetOrderWhen(id, raw) }))
+	mux.HandleFunc("POST /api/v1/shop-hours/get", auth(func(id string, raw map[string]any) (any, error) { return s.App.ShopHours(id, raw) }))
+	mux.HandleFunc("POST /api/v1/shop-hours/save", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveShopHours(id, raw) }))
+	mux.HandleFunc("POST /api/v1/customers/file", auth(func(id string, raw map[string]any) (any, error) { return s.App.CustomerFile(id, raw) }))
 	mux.HandleFunc("POST /api/v1/customers", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveCustomer(id, raw) }))
+	mux.HandleFunc("POST /api/v1/customers/delete", auth(func(id string, raw map[string]any) (any, error) { return s.App.DeleteCustomer(id, raw) }))
 	mux.HandleFunc("POST /api/v1/customer-groups", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveCustomerGroup(id, raw) }))
 	mux.HandleFunc("POST /api/v1/customer-groups/rename", auth(func(id string, raw map[string]any) (any, error) { return s.App.RenameCustomerGroup(id, raw) }))
 	mux.HandleFunc("POST /api/v1/customer-groups/delete", auth(func(id string, raw map[string]any) (any, error) { return s.App.DeleteCustomerGroup(id, raw) }))
@@ -192,6 +213,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/reports", auth(func(id string, raw map[string]any) (any, error) { return s.App.Reports(id, raw) }))
 	mux.HandleFunc("GET /api/v1/notifications", auth(func(id string, _ map[string]any) (any, error) { return s.App.Notifications(id) }))
 	mux.HandleFunc("POST /api/v1/notifications/read", auth(func(id string, raw map[string]any) (any, error) { return s.App.MarkRead(id, raw) }))
+	mux.HandleFunc("GET /api/v1/support/tickets", auth(func(id string, _ map[string]any) (any, error) { return s.App.SupportTickets(id) }))
+	mux.HandleFunc("POST /api/v1/support/tickets", auth(func(id string, raw map[string]any) (any, error) { return s.App.CreateSupportTicket(id, raw) }))
+	mux.HandleFunc("POST /api/v1/support/tickets/reply", auth(func(id string, raw map[string]any) (any, error) { return s.App.ReplySupportTicket(id, raw) }))
+	mux.HandleFunc("POST /api/v1/support/tickets/close", auth(func(id string, raw map[string]any) (any, error) { return s.App.CloseSupportTicket(id, raw) }))
 	mux.HandleFunc("GET /api/v1/admin/overview", auth(func(id string, _ map[string]any) (any, error) { return s.App.AdminOverview(id) }))
 	mux.HandleFunc("POST /api/v1/admin/users", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminUsers(id, raw) }))
 	mux.HandleFunc("POST /api/v1/admin/businesses", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminBusinesses(id, raw) }))
@@ -258,6 +283,24 @@ func videoExt(contentType, name string) string {
 		return ".mp4"
 	}
 	return ""
+}
+
+func requestOrigin(r *http.Request) string {
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); strings.HasPrefix(origin, "https://") || strings.HasPrefix(origin, "http://") {
+		return strings.TrimRight(origin, "/")
+	}
+	proto := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		proto = "https"
+	}
+	host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	if host == "" || strings.HasPrefix(host, "/") {
+		return ""
+	}
+	return proto + "://" + host
 }
 
 func bearer(r *http.Request) string {

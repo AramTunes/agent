@@ -24,6 +24,10 @@ function StartPage() {
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [shownCode, setShownCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [categoryError, setCategoryError] = useState("");
+  const [categoriesReady, setCategoriesReady] = useState(false);
   const [categoryId, setCategoryId] = useState("");
   const [pageFor, setPageFor] = useState<"self" | "business" | "">("");
   const [pageName, setPageName] = useState("");
@@ -35,6 +39,8 @@ function StartPage() {
   useEffect(() => {
     categoriesFn().then((res) => {
       if (res.ok) setCategories(res.data);
+      else setCategoryError(res.error || "حوزه‌ها خوانده نشد");
+      setCategoriesReady(true);
     });
     setDomain(window.location.hostname);
   }, []);
@@ -67,11 +73,22 @@ function StartPage() {
     })();
   }
 
-  async function finishAccount(event: React.FormEvent) {
-    event.preventDefault();
+  async function finishAccount(withPassword: boolean) {
     setError("");
+    if (withPassword) {
+      if (password.length < 8) {
+        setError("رمز باید حداقل ۸ نویسه باشد");
+        return;
+      }
+      if (password !== confirm) {
+        setError("تکرار رمز با رمز یکی نیست");
+        return;
+      }
+    }
     setPending(true);
-    const res = await registerPersonFn({ data: { name: name.trim(), phone, code: code.trim() } });
+    const res = await registerPersonFn({
+      data: { name: name.trim(), phone, code: code.trim(), ...(withPassword ? { password, confirm } : {}) },
+    });
     setPending(false);
     if (!res.ok) {
       setError(res.error);
@@ -106,7 +123,7 @@ function StartPage() {
     return <Shell><Skeleton className="h-40" /></Shell>;
   }
 
-  const accountSteps = [{ label: "نام" }, { label: "موبایل" }, { label: "کد" }];
+  const accountSteps = [{ label: "نام" }, { label: "موبایل" }, { label: "کد" }, { label: "رمز" }];
   const pageSteps = [{ label: "حوزه" }, { label: "برای کی" }, { label: "اسم" }, { label: "کاربری" }];
 
   return (
@@ -114,7 +131,7 @@ function StartPage() {
       <div className="mx-auto grid w-full max-w-xl gap-6">
         <Stepper className="w-full" current={step} steps={phase === "account" ? accountSteps : pageSteps} />
         <div className="grid gap-3">
-          <h1 className="text-3xl font-extrabold">{phase === "account" ? ["نام شما", "شماره موبایل", "کد تأیید"][step] : ["حوزه فعالیت", "این صفحه برای کیست", "اسم صفحه", "نام کاربری"][step]}</h1>
+          <h1 className="text-3xl font-extrabold">{phase === "account" ? ["نام شما", "شماره موبایل", "کد تأیید", "رمز عبور"][step] : ["حوزه فعالیت", "این صفحه برای کیست", "اسم صفحه", "نام کاربری"][step]}</h1>
           <p className="text-sm leading-7 text-muted">
             {phase === "account"
               ? "اول حساب شخصی ساخته می‌شود. بعد صفحه کسب‌وکار یا شخصی را جدا می‌سازید."
@@ -143,7 +160,7 @@ function StartPage() {
               </form>
             ) : null}
             {phase === "account" && step === 2 ? (
-              <form className="grid gap-3" onSubmit={(event) => void finishAccount(event)}>
+              <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); if (code.trim().length < 6) setError("کد را کامل وارد کنید"); else { setError(""); setStep(3); } }}>
                 {shownCode ? (
                   <p className="rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">
                     پیامک وصل نیست. کد تأیید: <span className="font-bold" dir="ltr">{faNum(shownCode)}</span>
@@ -153,13 +170,32 @@ function StartPage() {
                   <OtpField value={code} onChange={setCode} />
                 </Field>
                 {error ? <ErrorNote>{error}</ErrorNote> : null}
-                <div className="flex gap-2">
-                  <Button type="button" variant="quiet" onClick={() => { setError(""); setStep(1); }}>بازگشت</Button>
-                  <Button type="submit" variant="signup" disabled={pending || code.trim().length < 6}>{pending ? "در حال ساخت" : "ساخت حساب"}</Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="quiet" onClick={() => { setError(""); setCode(""); setStep(1); }}>تغییر شماره</Button>
+                  <Button type="button" variant="quiet" disabled={pending} onClick={() => requestCode()}>ارسال دوباره</Button>
+                  <Button type="submit" variant="signup" disabled={code.trim().length < 6}>ادامه</Button>
+                </div>
+              </form>
+            ) : null}
+            {phase === "account" && step === 3 ? (
+              <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void finishAccount(true); }}>
+                <p className="text-sm leading-6 text-muted">رمز اختیاری است. اگر نگذارید، هر بار با کد وارد می‌شوید.</p>
+                <Field label="رمز عبور" hint="حداقل ۸ نویسه">
+                  <TextInput type="password" dir="ltr" className="text-left" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={8} />
+                </Field>
+                <Field label="تکرار رمز">
+                  <TextInput type="password" dir="ltr" className="text-left" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} minLength={8} />
+                </Field>
+                {error ? <ErrorNote>{error}</ErrorNote> : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="quiet" onClick={() => { setError(""); setStep(2); }}>بازگشت</Button>
+                  <Button type="button" variant="quiet" disabled={pending} onClick={() => void finishAccount(false)}>{pending ? "در حال ساخت" : "بدون رمز"}</Button>
+                  <Button type="submit" variant="signup" disabled={pending}>{pending ? "در حال ساخت" : "ذخیره رمز"}</Button>
                 </div>
               </form>
             ) : null}
             {phase === "page" && step === 0 ? (
+              categoryError ? <ErrorNote>{categoryError}</ErrorNote> : !categoriesReady ? <Skeleton className="h-24" /> : categories.length === 0 ? <ErrorNote>حوزه‌ای برای انتخاب نیست.</ErrorNote> : (
               <div className="grid gap-2 sm:grid-cols-2">
                 {categories.map((cat) => (
                   <button key={cat.id} type="button" className={categoryId === cat.id ? "min-h-11 rounded-xl bg-jade px-3 text-sm font-semibold text-on-jade" : "min-h-11 rounded-xl border border-line bg-card px-3 text-sm"} onClick={() => { setCategoryId(cat.id); setError(""); setStep(1); }}>
@@ -167,6 +203,7 @@ function StartPage() {
                   </button>
                 ))}
               </div>
+              )
             ) : null}
             {phase === "page" && step === 1 ? (
               <div className="grid gap-3">

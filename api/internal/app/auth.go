@@ -301,6 +301,9 @@ func (s *Service) SignInCode(raw map[string]any) (any, error) {
 		return nil, err
 	}
 	code := strings.TrimSpace(mustString(raw, "code"))
+	if !s.rate("signin-code:"+phone, 8, time.Minute) {
+		return nil, fail(429, "RATE", "تلاش زیاد بود. کمی بعد دوباره وارد شوید")
+	}
 	acc, err := s.accountByPhone(phone)
 	if err != nil {
 		return nil, err
@@ -328,6 +331,9 @@ func (s *Service) ResetPassword(raw map[string]any) (any, error) {
 	code := strings.TrimSpace(mustString(raw, "code"))
 	password := mustString(raw, "password")
 	confirm := mustString(raw, "confirm")
+	if !s.rate("reset:"+phone, 8, time.Minute) {
+		return nil, fail(429, "RATE", "تلاش زیاد بود. کمی بعد دوباره تلاش کنید")
+	}
 	if len(password) < 8 {
 		return nil, fail(400, "VALIDATION", "رمز باید حداقل ۸ نویسه باشد")
 	}
