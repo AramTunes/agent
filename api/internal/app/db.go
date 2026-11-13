@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
-  expires_at TEXT NOT NULL
+  expires_at TEXT NOT NULL,
+  id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  last_seen TEXT NOT NULL DEFAULT '',
+  device TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS profiles (
   user_id TEXT PRIMARY KEY,
@@ -364,11 +368,24 @@ func Open(path string) (*sql.DB, error) {
 		`ALTER TABLE businesses ADD COLUMN remind_hours INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE bookings ADD COLUMN customer_name TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bookings ADD COLUMN customer_phone TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN last_seen TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE sessions ADD COLUMN device TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
 			return nil, err
 		}
+	}
+	if _, err := db.Exec(`ALTER TABLE bookings ADD COLUMN price_toman INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			db.Close()
+			return nil, err
+		}
+	} else if _, err := db.Exec(`UPDATE bookings SET price_toman = (SELECT COALESCE(price_toman, 0) FROM services s WHERE s.id = bookings.service_id)`); err != nil {
+		db.Close()
+		return nil, err
 	}
 	for _, stmt := range []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS menu_orders_receipt_uq ON menu_orders (receipt_token) WHERE receipt_token <> ''`,

@@ -116,25 +116,25 @@ func (s *Server) Handler() http.Handler {
 		writeOK(w, map[string]any{"user": user})
 	})
 	mux.HandleFunc("POST /api/v1/auth/lookup", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.LookupPhone(body(r)) })
+		s.send(w, func() (any, error) { return s.App.LookupPhone(withDevice(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/code", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.SendCode(body(r)) })
+		s.send(w, func() (any, error) { return s.App.SendCode(withDevice(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/password", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.SignInPassword(body(r)) })
+		s.send(w, func() (any, error) { return s.App.SignInPassword(withDevice(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/code-login", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.SignInCode(body(r)) })
+		s.send(w, func() (any, error) { return s.App.SignInCode(withDevice(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/reset", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.ResetPassword(body(r)) })
+		s.send(w, func() (any, error) { return s.App.ResetPassword(withDevice(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/start", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.StartAccount(body(r)) })
+		s.send(w, func() (any, error) { return s.App.StartAccount(withDevice(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/register", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.RegisterPerson(body(r)) })
+		s.send(w, func() (any, error) { return s.App.RegisterPerson(withDevice(r)) })
 	})
 	mux.HandleFunc("GET /api/v1/invites/{token}", func(w http.ResponseWriter, r *http.Request) {
 		s.send(w, func() (any, error) { return s.App.StaffInvite(r.PathValue("token")) })
@@ -143,7 +143,13 @@ func (s *Server) Handler() http.Handler {
 		s.send(w, func() (any, error) { return s.App.StaffInviteCode(body(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/invites/accept", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.AcceptStaffInvite(body(r)) })
+		s.send(w, func() (any, error) { return s.App.AcceptStaffInvite(withDevice(r)) })
+	})
+	mux.HandleFunc("GET /api/v1/me/sessions", func(w http.ResponseWriter, r *http.Request) {
+		s.send(w, func() (any, error) { return s.App.ListSessions(bearer(r)) })
+	})
+	mux.HandleFunc("POST /api/v1/me/sessions/revoke", func(w http.ResponseWriter, r *http.Request) {
+		s.send(w, func() (any, error) { return s.App.RevokeSession(bearer(r), body(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/signout", func(w http.ResponseWriter, r *http.Request) {
 		s.App.SignOut(bearer(r))
@@ -325,6 +331,12 @@ func body(r *http.Request) map[string]any {
 		return map[string]any{}
 	}
 	return m
+}
+
+func withDevice(r *http.Request) map[string]any {
+	raw := body(r)
+	raw["device"] = app.DeviceLabel(r.UserAgent())
+	return raw
 }
 
 func (s *Server) send(w http.ResponseWriter, fn func() (any, error)) {

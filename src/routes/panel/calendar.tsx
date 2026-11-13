@@ -32,6 +32,7 @@ function CalendarPage() {
   const [ready, setReady] = useState(false);
   const [bookingOpen, setBookingOpen] = useState(false);
   const [customerOpen, setCustomerOpen] = useState(false);
+  const [boardTick, setBoardTick] = useState(0);
 
   useEffect(() => {
     if (!businessId) return;
@@ -87,18 +88,19 @@ function CalendarPage() {
           businessId={businessId}
           timezone={zone}
           weekly={weekly}
+          reloadToken={boardTick}
           more={<Link to="/panel/bookings" className="shrink-0 text-sm font-semibold text-[#ffa640]">مشاهده بیشتر</Link>}
           showStaff={role !== "staff"}
         />
       ) : null}
-      {bookingOpen ? <BookingDialog businessId={businessId} zone={zone} onClose={() => setBookingOpen(false)} /> : null}
+      {bookingOpen ? <BookingDialog businessId={businessId} zone={zone} onClose={() => setBookingOpen(false)} onSaved={() => setBoardTick((value) => value + 1)} /> : null}
       {customerOpen ? <CustomerDialog businessId={businessId} onClose={() => setCustomerOpen(false)} /> : null}
     </div>
   );
 }
 
 type Named = { id: string; name: string };
-type Person = Named & { serviceIds: string[]; weekly: { weekday: number; startMin: number; endMin: number }[] };
+type Person = Named & { title?: string; label: string; serviceIds: string[]; weekly: { weekday: number; startMin: number; endMin: number }[] };
 type Holiday = { staffId?: string | null; date: string };
 type Customer = { id: string; name: string; phone: string; notes: string; group?: string; label: string };
 type Slot = { start: string; taken?: boolean };
@@ -110,6 +112,25 @@ function labeledCustomers(rows: { id: string; name: string; phone: string; notes
     ...row,
     label: (counts.get(row.name) ?? 0) > 1 && row.phone ? `${row.name} · ${row.phone}` : row.name,
   }));
+}
+
+function labelStaff(people: Omit<Person, "label">[]): Person[] {
+  const nameCount = new Map<string, number>();
+  for (const person of people) nameCount.set(person.name, (nameCount.get(person.name) ?? 0) + 1);
+  const titled = people.map((person) => {
+    const title = person.title?.trim() ?? "";
+    const label = (nameCount.get(person.name) ?? 0) > 1 && title ? `${person.name} · ${title}` : person.name;
+    return { ...person, label };
+  });
+  const labelCount = new Map<string, number>();
+  for (const person of titled) labelCount.set(person.label, (labelCount.get(person.label) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  return titled.map((person) => {
+    if ((labelCount.get(person.label) ?? 0) < 2) return person;
+    const n = (seen.get(person.label) ?? 0) + 1;
+    seen.set(person.label, n);
+    return { ...person, label: `${person.label} ${faNum(n)}` };
+  });
 }
 
 function weekdayOf(day: string) {
@@ -149,8 +170,8 @@ function jalaliStamp(day: string) {
 
 const triggerClass = "inline-flex h-11 w-full items-center justify-start gap-2 rounded-xl border border-line bg-card px-3 text-sm font-normal disabled:opacity-50";
 
-function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone: string; onClose: () => void }) {
-  const { role } = usePanel();
+function BookingDialog({ businessId, zone, onClose, onSaved }: { businessId: string; zone: string; onClose: () => void; onSaved?: () => void }) {
+  const { role, staffId: mine } = usePanel();
   const today = todayYmd(zone);
   const [day, setDay] = useState("");
   const [services, setServices] = useState<Named[]>([]);
@@ -178,7 +199,7 @@ function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone
   const timeAnchor = useRef<HTMLButtonElement>(null);
 
   const serviceId = services.find((item) => item.name === serviceName)?.id ?? "";
-  const staffId = staff.find((item) => item.name === staffName)?.id ?? "";
+  const staffId = staff.find((item) => item.label === staffName)?.id ?? "";
   const known = useMemo(() => customers.find((item) => item.id === customerId) ?? null, [customers, customerId]);
   const closed = useCallback((value: string) => dayClosed(value, staff, holidays, serviceId, staffId), [staff, holidays, serviceId, staffId]);
   const free = slots.filter((slot) => !slot.taken);
@@ -194,17 +215,22 @@ function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone
     manageBusinessFn({ data: { businessId } }).then((res) => {
       if (!res.ok) return;
       const nextServices = res.data.services.filter((item: { active: boolean }) => item.active).map((item: Named) => ({ id: item.id, name: item.name }));
-      const nextStaff = res.data.staff.filter((item: { active: boolean }) => item.active).map((item: Person) => ({
-        id: item.id,
-        name: item.name,
-        serviceIds: item.serviceIds ?? [],
-        weekly: item.weekly ?? [],
-      }));
+      const roster = (res.data.staff as { active?: boolean; id: string; name: string; title?: string; serviceIds?: string[]; weekly?: Person["weekly"] }[])
+        .filter((item) => item.active !== false)
+        .filter((item) => role !== "staff" || !mine || item.id === mine)
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          title: item.title,
+          serviceIds: item.serviceIds ?? [],
+          weekly: item.weekly ?? [],
+        }));
+      const nextStaff = labelStaff(roster);
       const saved = readBookingDefaults(businessId);
       setServices(nextServices);
       setStaff(nextStaff);
       setServiceName(pickDefault(saved.service, nextServices.map((item: Named) => item.name), nextServices[0]?.name ?? ""));
-      setStaffName(pickDefault(saved.staff, nextStaff.map((item: Person) => item.name), nextStaff[0]?.name ?? ""));
+      setStaffName(pickDefault(saved.staff, nextStaff.map((item) => item.label), nextStaff[0]?.label ?? ""));
       const nextGroups = (res.data.customerGroups ?? []) as CustomGroup[];
       const groupNames = [...defaultCustomerGroups, ...nextGroups.map((item) => item.name).filter((name) => !defaultCustomerGroups.includes(name))];
       setGroups(nextGroups);
@@ -214,7 +240,7 @@ function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone
     customersFn({ data: { businessId, q: "" } }).then((res) => {
       if (res.ok) setCustomers(labeledCustomers(res.data));
     });
-  }, [businessId]);
+  }, [businessId, role, mine]);
 
   useEffect(() => {
     if (!serviceId || !day) {
@@ -326,6 +352,7 @@ function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone
               return;
             }
             toast.success(known ? "نوبت دستی ثبت شد" : "مشتری و نوبت ثبت شد");
+            onSaved?.();
             onClose();
           }}
         >
@@ -342,7 +369,7 @@ function BookingDialog({ businessId, zone, onClose }: { businessId: string; zone
             {role === "staff" ? (
               <div className="flex min-h-11 items-center rounded-xl border border-line bg-card px-3 text-sm">{staffName || "پرسنل شما"}</div>
             ) : (
-            <Combobox strict options={staff.map((item) => item.name)} value={staffName} onChange={(value) => { setStaffName(value); rememberBookingDefaults(businessId, { staff: value }); setStart(""); setDay(""); }} placeholder="انتخاب پرسنل" emptyText="پرسنلی با این نام نیست" />
+            <Combobox strict options={staff.map((item) => item.label)} value={staffName} onChange={(value) => { setStaffName(value); rememberBookingDefaults(businessId, { staff: value }); setStart(""); setDay(""); }} placeholder="انتخاب پرسنل" emptyText="پرسنلی با این نام نیست" />
             )}
           </Field>
           <div className="grid grid-cols-2 gap-3">

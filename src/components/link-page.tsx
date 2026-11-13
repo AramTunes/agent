@@ -343,8 +343,9 @@ export function CustomerLink({
               );
             }
             if (block.type === "divider") {
+              const span = face?.layout === "card" && face.columns === 2;
               return (
-                <li key={block.id} className="my-1">
+                <li key={block.id} className={span ? "col-span-2 my-1" : "my-1"}>
                   <DividerLine text={block.body} align={block.align} tone={tokens?.light ? "dark" : "light"} />
                 </li>
               );
@@ -626,6 +627,21 @@ function FileWindow({ title, files, remote, onClose }: { title: string; files: C
 function GalleryBlock({ block }: { block: CustomerBlock }) {
   const photos = (block.items ?? []).filter((item) => item.value.startsWith("data:image/"));
   const face = useContext(FaceContext);
+  if (face?.layout === "card") {
+    const shown = photos.slice(0, 4);
+    return (
+      <div className="flex aspect-square flex-col overflow-hidden" style={face.chrome}>
+        {shown.length > 0 ? (
+          <div className={`grid min-h-0 flex-1 gap-1 ${shown.length > 1 ? "grid-cols-2" : ""}`}>
+            {shown.map((item) => (
+              <img key={item.id} src={item.value} alt="" draggable={false} className="h-full w-full object-cover" />
+            ))}
+          </div>
+        ) : null}
+        {block.title?.trim() ? <p className="truncate px-2 py-1.5 text-center text-sm font-medium">{block.title}</p> : null}
+      </div>
+    );
+  }
   return (
     <div style={face ? { color: face.page } : undefined} className={face ? "" : "text-white"}>
       {block.title?.trim() ? <p className="text-base font-medium leading-6">{block.title}</p> : null}
@@ -705,6 +721,20 @@ function cleanId(value: string, youtube: boolean) {
 function VideoBlock({ block }: { block: CustomerBlock }) {
   const clips = (block.items ?? []).filter((item) => item.kind === "file" || videoEmbed(item.kind, item.value));
   const face = useContext(FaceContext);
+  if (face?.layout === "card") {
+    const clip = clips[0];
+    return (
+      <div className="relative aspect-square overflow-hidden" style={face.chrome}>
+        {clip?.kind === "file" ? (
+          <video src={clip.value} controls playsInline className="absolute inset-0 h-full w-full bg-black object-cover" />
+        ) : clip ? (
+          <iframe src={videoEmbed(clip.kind, clip.value)} title={clip.kind === "aparat" ? "آپارات" : "یوتیوب"} className="absolute inset-0 h-full w-full" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+        ) : (
+          <p className="flex h-full items-center justify-center px-3 text-center text-sm font-medium">{block.title?.trim() || "فیلم"}</p>
+        )}
+      </div>
+    );
+  }
   return (
     <div style={face ? { color: face.page } : undefined} className={face ? "" : "text-white"}>
       {block.title?.trim() ? <p className="text-base font-medium leading-6">{block.title}</p> : null}

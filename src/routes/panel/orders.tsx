@@ -6,7 +6,7 @@ import { JalaliCalendar } from "@/components/jalali-calendar";
 import { Badge, Button, Empty, Skeleton } from "@/components/ui";
 import { Select } from "@/components/ui/select";
 import { faNum, toman } from "@/lib/booking/fa";
-import { formatWhen } from "@/lib/booking/format";
+import { formatSlot, formatWhen } from "@/lib/booking/format";
 import { todayYmd } from "@/lib/booking/time";
 import { ordersFn, setOrderStatusFn, setOrderWhenFn, shopHoursFn } from "@/lib/api";
 import { deliverySlots, type ShopSpan } from "@/lib/shop-hours";
@@ -43,13 +43,13 @@ function statusLabel(status: string) {
 }
 
 function money(order: Order) {
-  if (!order.priced) return "قطعی نیست";
-  if ((order.currency || "toman") !== "toman") return `${faNum(order.price)} ${order.currency}`;
+  if ((order.currency || "toman") !== "toman") return "";
+  if (!order.priced && order.price <= 0) return "";
   return toman(order.price);
 }
 
 function whenText(order: Order) {
-  if (order.whenKind === "later" && order.fulfillAt) return `برای ${faNum(order.fulfillAt)}`;
+  if (order.whenKind === "later" && order.fulfillAt) return `برای ${formatSlot(order.fulfillAt)}`;
   return "هرچه زودتر";
 }
 
@@ -63,7 +63,9 @@ function lineText(line: Line) {
     const from = toman(line.price ?? 0);
     return line.priceTo ? `${name}${qty} · ${from} تا ${toman(line.priceTo)}` : `${name}${qty} · از ${from}`;
   }
-  return `${name}${qty}`;
+  const each = (line.price ?? 0) * (line.qty && line.qty > 0 ? line.qty : 1);
+  const priced = line.currency && line.currency !== "toman" ? `${faNum(each)} ${line.currency}` : toman(each);
+  return `${name}${qty} · ${priced}`;
 }
 
 function OrdersPage() {
@@ -117,7 +119,7 @@ function OrdersPage() {
               ))}
             </ul>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted">
-              <span>مبلغ: {money(order)}</span>
+              {money(order) ? <span>مبلغ: {money(order)}</span> : null}
               <span>{whenText(order)}</span>
               <span>ثبت: {formatWhen(order.createdAt, zone)}</span>
             </div>

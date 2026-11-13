@@ -35,7 +35,9 @@ type Service struct {
 }
 
 func New(db *sql.DB) *Service {
-	return &Service{db: db, hits: map[string][]time.Time{}, now: time.Now}
+	s := &Service{db: db, hits: map[string][]time.Time{}, now: time.Now}
+	s.backfillOwners()
+	return s
 }
 
 func newID() string {

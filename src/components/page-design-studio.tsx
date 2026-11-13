@@ -50,9 +50,9 @@ export function DesignStudio({
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 pb-3">
           <DesignPanes editor={editor} design={design} />
         </div>
-        <div className="flex shrink-0 gap-2 border-t border-line px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <button type="button" onClick={onClose} className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-line bg-paper text-sm font-semibold">انصراف</button>
-          <button type="button" onClick={onSave} className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink">ذخیره</button>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-line px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+          <button type="button" onClick={onClose} className="inline-flex h-11 items-center justify-center rounded-full border border-line bg-paper px-5 text-sm font-semibold">انصراف</button>
+          <button type="button" onClick={onSave} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-5 text-sm font-semibold text-on-ink">ذخیره</button>
         </div>
       </div>
       {editor.crop ? <CropSheet src={editor.crop} onCancel={() => editor.setCrop(null)} onSave={(file) => void editor.uploadImage(file)} /> : null}
@@ -99,9 +99,9 @@ export function DesktopDesign({
               <div className="min-h-0 flex-1 overflow-y-auto p-4">
                 <DesignPanes editor={editor} design={design} />
               </div>
-              <div className="flex shrink-0 gap-2 border-t border-line px-4 py-3">
-                <button type="button" onClick={onClose} className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-line bg-paper text-sm font-semibold">انصراف</button>
-                <button type="button" onClick={onSave} className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink">ذخیره</button>
+              <div className="flex shrink-0 justify-end gap-2 border-t border-line px-4 py-3">
+                <button type="button" onClick={onClose} className="inline-flex h-11 items-center justify-center rounded-full border border-line bg-paper px-5 text-sm font-semibold">انصراف</button>
+                <button type="button" onClick={onSave} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-5 text-sm font-semibold text-on-ink">ذخیره</button>
               </div>
             </div>
             <div className="min-h-0 border-s border-line bg-paper p-3">
@@ -554,9 +554,9 @@ function CropSheet({ src, onCancel, onSave }: { src: string; onCancel: () => voi
             });
           }} />
         </label>
-        <div className="mt-3 flex gap-2">
-          <button type="button" onClick={onCancel} className="h-11 flex-1 rounded-full border border-line text-sm font-semibold">انصراف</button>
-          <button type="button" onClick={() => void exportCrop(src, zoom, offset, frame).then(onSave).catch(() => toast.error("برش تصویر ممکن نشد"))} className="h-11 flex-1 rounded-full bg-ink text-sm font-semibold text-on-ink">ثبت و آپلود</button>
+        <div className="mt-3 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="inline-flex h-11 items-center justify-center rounded-full border border-line px-5 text-sm font-semibold">انصراف</button>
+          <button type="button" onClick={() => void exportCrop(src, zoom, offset, frame).then(onSave).catch(() => toast.error("برش تصویر ممکن نشد"))} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-5 text-sm font-semibold text-on-ink">ثبت و آپلود</button>
         </div>
       </div>
     </div>

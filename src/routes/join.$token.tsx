@@ -64,7 +64,7 @@ function JoinPage() {
         {!info && !missing ? <Skeleton className="h-40" /> : null}
         {info ? (
           <Card>
-            <p className="text-sm leading-7 text-muted">برای پیوستن به {info.businessName} نام خود را تأیید کنید. کد به شماره {faNum(info.phone)} می‌رود.</p>
+            <p className="text-sm leading-7 text-muted">برای پیوستن به {info.businessName}{info.title ? ` به عنوان ${info.title}` : ""} نام خود را تأیید کنید. کد به شماره {faNum(info.phone)} می‌رود.</p>
             <form className="mt-4 grid gap-3" onSubmit={(event) => void accept(event)}>
               <Field label="نام"><TextInput value={name} onChange={(event) => setName(event.target.value)} required minLength={2} /></Field>
               {shownCode ? (

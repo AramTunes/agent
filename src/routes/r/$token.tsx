@@ -4,11 +4,11 @@ import { Shell } from "@/components/shell";
 import { Card, Empty, Skeleton } from "@/components/ui";
 import { receiptFn } from "@/lib/api";
 import { faNum, toman } from "@/lib/booking/fa";
-import { formatWhen } from "@/lib/booking/format";
+import { formatSlot, formatWhen } from "@/lib/booking/format";
 
 export const Route = createFileRoute("/r/$token")({ component: ReceiptPage });
 
-type Line = { title?: string; variant?: string; qty?: number; price?: number; priceTo?: number; priceType?: string };
+type Line = { title?: string; variant?: string; qty?: number; price?: number; priceTo?: number; priceType?: string; currency?: string };
 type Receipt = {
   kind: "order" | "booking";
   word: string;
@@ -57,12 +57,14 @@ function lineText(line: Line) {
     const from = toman(line.price ?? 0);
     return line.priceTo ? `${name}${qty} · ${from} تا ${toman(line.priceTo)}` : `${name}${qty} · از ${from}`;
   }
-  return `${name}${qty}`;
+  const each = (line.price ?? 0) * (line.qty && line.qty > 0 ? line.qty : 1);
+  const priced = line.currency && line.currency !== "toman" ? `${faNum(each)} ${line.currency}` : toman(each);
+  return `${name}${qty} · ${priced}`;
 }
 
 function money(item: Receipt) {
-  if (item.kind === "order" && !item.priced) return "قطعی نیست";
-  if ((item.currency || "toman") !== "toman") return `${faNum(item.price ?? 0)} ${item.currency ?? ""}`;
+  if (item.kind === "order" && !item.priced && !(item.price ?? 0)) return "";
+  if ((item.currency || "toman") !== "toman") return "";
   return toman(item.price ?? 0);
 }
 
@@ -91,9 +93,10 @@ function ReceiptPage() {
     ["وضعیت", statusFa[item.status] ?? item.status],
   ];
   if (item.kind === "order") {
-    rows.push(["زمان تحویل", item.when ? faNum(item.when) : "هرچه زودتر"]);
+    rows.push(["زمان تحویل", item.when && item.when !== "هرچه زودتر" ? formatSlot(item.when) : "هرچه زودتر"]);
     rows.push(["آدرس", item.address || "ثبت نشده"]);
-    rows.push(["مبلغ", money(item)]);
+    const amount = money(item);
+    if (amount) rows.push(["مبلغ", amount]);
     if (item.createdAt) rows.push(["زمان ثبت", formatWhen(item.createdAt, "Asia/Tehran")]);
   } else {
     rows.push(["خدمت", item.service || ""]);

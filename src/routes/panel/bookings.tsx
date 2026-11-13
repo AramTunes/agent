@@ -2,7 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
-import { Badge, Card, Empty, Skeleton } from "@/components/ui";
+import { VisitDialog } from "@/components/week-board";
+import { Badge, Empty, Skeleton } from "@/components/ui";
 import { businessBookingsFn, manageBusinessFn } from "@/lib/api";
 import { STATUS_FA, faNum } from "@/lib/booking/fa";
 import { formatWhen } from "@/lib/booking/format";
@@ -14,6 +15,8 @@ export const Route = createFileRoute("/panel/bookings")({ component: AllBookings
 type Row = {
   id: string;
   serviceName: string;
+  serviceId: string;
+  staffId: string;
   staffName: string;
   customerName: string;
   customerPhone: string;
@@ -26,6 +29,8 @@ function AllBookingsPage() {
   const { businessId } = usePanel();
   const [rows, setRows] = useState<Row[] | null>(null);
   const [zone, setZone] = useState("Asia/Tehran");
+  const [picked, setPicked] = useState<Row | null>(null);
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
     if (!businessId) return;
@@ -41,7 +46,7 @@ function AllBookingsPage() {
     return () => {
       live = false;
     };
-  }, [businessId]);
+  }, [businessId, tick]);
 
   if (!businessId) return <Empty title="اول کسب‌وکار بسازید" body="نوبت‌ها بعد از ساخت صفحه این‌جا دیده می‌شوند." />;
 
@@ -63,7 +68,12 @@ function AllBookingsPage() {
         <section key={day} className="grid gap-2">
           <h2 className="text-sm font-bold text-muted">{dayTitle(day)}</h2>
           {(groups.get(day) ?? []).map((row) => (
-            <Card key={row.id} className="min-w-0">
+            <button
+              key={row.id}
+              type="button"
+              onClick={() => setPicked(row)}
+              className="min-w-0 rounded-card border border-line bg-card p-5 text-start shadow-sm"
+            >
               <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="break-words font-bold">{formatWhen(row.startsAt, row.timezone || zone)} · {row.serviceName}</div>
@@ -71,10 +81,22 @@ function AllBookingsPage() {
                 </div>
                 <Badge tone={row.status === "cancelled" ? "danger" : "jade"}>{STATUS_FA[row.status] ?? row.status}</Badge>
               </div>
-            </Card>
+            </button>
           ))}
         </section>
       ))}
+      {picked && businessId ? (
+        <VisitDialog
+          booking={picked}
+          businessId={businessId}
+          zone={picked.timezone || zone}
+          onClose={() => setPicked(null)}
+          onDone={() => {
+            setPicked(null);
+            setTick((value) => value + 1);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

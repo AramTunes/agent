@@ -3,12 +3,12 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
 import { JalaliCalendar } from "@/components/jalali-calendar";
-import { Button, Card, Empty, Field, Area, Skeleton, TextInput } from "@/components/ui";
+import { Button, Card, DialogActions, Empty, Field, Area, Skeleton, TextInput } from "@/components/ui";
 import { Select } from "@/components/ui/select";
-import { WEEKDAYS_FA, enDigits } from "@/lib/booking/fa";
+import { WEEKDAYS_FA, enDigits, faNum } from "@/lib/booking/fa";
 import { formatDay } from "@/lib/booking/format";
 import { todayYmd } from "@/lib/booking/time";
-import { addHolidayFn, categoriesFn, deleteBusinessFn, manageBusinessFn, removeHolidayFn, saveShopHoursFn, shopHoursFn, updateBusinessFn } from "@/lib/api";
+import { addHolidayFn, deleteBusinessFn, manageBusinessFn, removeHolidayFn, saveShopHoursFn, shopHoursFn, updateBusinessFn } from "@/lib/api";
 
 export const Route = createFileRoute("/panel/settings")({ component: SettingsPage });
 
@@ -28,13 +28,13 @@ type Form = {
   allowAnyStaff: boolean;
   isDemo: boolean;
   slug: string;
+  categoryName: string;
 };
 
 function SettingsPage() {
   const { businessId, memberships } = usePanel();
   const role = memberships.find((item) => item.businessId === businessId)?.role;
   const [form, setForm] = useState<Form | null>(null);
-  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [holidays, setHolidays] = useState<{ id: string; staffId: string | null; date: string; note: string }[]>([]);
   const [staff, setStaff] = useState<{ id: string; name: string }[]>([]);
   const [day, setDay] = useState(todayYmd("Asia/Tehran"));
@@ -65,6 +65,7 @@ function SettingsPage() {
         allowAnyStaff: data.allowAnyStaff,
         isDemo: data.isDemo,
         slug: data.slug,
+        categoryName: data.categoryName ?? "",
       });
       setHolidays(data.holidays);
       setStaff(data.staff);
@@ -72,27 +73,25 @@ function SettingsPage() {
     });
   }
   useEffect(() => {
-    categoriesFn().then((res) => {
-      if (res.ok) setCategories(res.data);
-    });
-  }, []);
-  useEffect(() => {
     if (businessId) load(businessId);
   }, [businessId]);
 
   if (!businessId) return <Empty title="اول کسب‌وکار بسازید" body="تنظیمات بعد از ساخت صفحه در دسترس است." />;
   if (!form) return <Skeleton className="h-64" />;
   const owner = role === "owner";
+  const canManage = role === "owner" || role === "manager";
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card>
         <h2 className="text-lg font-bold">مشخصات و سیاست رزرو</h2>
         <p className="mt-1 text-sm text-muted">نشانی عمومی: /b/{form.slug}</p>
+        {canManage ? null : <p className="mt-1 text-sm leading-6 text-muted">سیاست رزرو را فقط صاحب یا مدیر عوض می‌کند.</p>}
         <form
           className="mt-4 grid gap-3"
           onSubmit={async (event) => {
             event.preventDefault();
+            if (!canManage) return;
             const res = await updateBusinessFn({
               data: {
                 businessId,
@@ -109,38 +108,40 @@ function SettingsPage() {
             else toast.success("تنظیمات ذخیره شد");
           }}
         >
-          <Field label="نام"><TextInput value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-          <Field label="توضیح"><Area value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
-          <Field label="دسته">
-            <Select
-              value={form.categoryId}
-              onChange={(e) => setForm({ ...form, categoryId: e.target.value })}
-              options={[{ value: "", label: "بدون دسته" }, ...categories.map((cat) => ({ value: cat.id, label: cat.name }))]}
-            />
+          <Field label="نام"><TextInput value={form.name} disabled={!canManage} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
+          <Field label="توضیح"><Area value={form.description} disabled={!canManage} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          <Field label="موضوع صفحه">
+            <p className="rounded-xl border border-line bg-paper px-3 py-2.5 text-sm">{form.categoryName || "بدون دسته"}</p>
+            <p className="text-xs leading-5 text-muted">بعد از ساخت صفحه عوض نمی‌شود.</p>
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="شهر"><TextInput value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
-            <Field label="تلفن"><TextInput value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
+            <Field label="شهر"><TextInput value={form.city} disabled={!canManage} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
+            <Field label="تلفن"><TextInput value={form.phone} disabled={!canManage} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
           </div>
-          <Field label="آدرس"><TextInput value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
-          <Field label="منطقه زمانی"><TextInput value={form.timezone} onChange={(e) => setForm({ ...form, timezone: e.target.value })} /></Field>
+          <Field label="آدرس"><TextInput value={form.address} disabled={!canManage} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
+          <Field label="منطقه زمانی"><TextInput value={form.timezone} disabled={!canManage} onChange={(e) => setForm({ ...form, timezone: e.target.value })} /></Field>
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="مهلت لغو (دقیقه)"><TextInput type="number" min={0} value={form.cancelBeforeMinutes} onChange={(e) => setForm({ ...form, cancelBeforeMinutes: Number(e.target.value) })} /></Field>
-            <Field label="حداقل فاصله رزرو (دقیقه)"><TextInput type="number" min={0} value={form.minLeadMinutes} onChange={(e) => setForm({ ...form, minLeadMinutes: Number(e.target.value) })} /></Field>
-            <Field label="افق رزرو (روز)"><TextInput type="number" min={1} value={form.maxHorizonDays} onChange={(e) => setForm({ ...form, maxHorizonDays: Number(e.target.value) })} /></Field>
-            <Field label="گام نوبت (دقیقه)"><TextInput type="number" min={5} value={form.slotStepMinutes} onChange={(e) => setForm({ ...form, slotStepMinutes: Number(e.target.value) })} /></Field>
-            <Field label="یادآوری (ساعت قبل)"><TextInput type="number" min={0} value={form.remindHours} onChange={(e) => setForm({ ...form, remindHours: Number(e.target.value) })} /></Field>
+            <Field label="مهلت لغو (دقیقه)"><TextInput type="number" min={0} disabled={!canManage} value={form.cancelBeforeMinutes} onChange={(e) => setForm({ ...form, cancelBeforeMinutes: Number(e.target.value) })} /></Field>
+            <Field label="حداقل فاصله رزرو (دقیقه)"><TextInput type="number" min={0} disabled={!canManage} value={form.minLeadMinutes} onChange={(e) => setForm({ ...form, minLeadMinutes: Number(e.target.value) })} /></Field>
+            <Field label="افق رزرو (روز)"><TextInput type="number" min={1} disabled={!canManage} value={form.maxHorizonDays} onChange={(e) => setForm({ ...form, maxHorizonDays: Number(e.target.value) })} /></Field>
+            <Field label="گام نوبت (دقیقه)"><TextInput type="number" min={5} disabled={!canManage} value={form.slotStepMinutes} onChange={(e) => setForm({ ...form, slotStepMinutes: Number(e.target.value) })} /></Field>
+            <Field label="یادآوری (ساعت قبل)"><TextInput type="number" min={0} disabled={!canManage} value={form.remindHours} onChange={(e) => setForm({ ...form, remindHours: Number(e.target.value) })} /></Field>
           </div>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={form.allowAnyStaff} onChange={(e) => setForm({ ...form, allowAnyStaff: e.target.checked })} />
+            <input type="checkbox" checked={form.allowAnyStaff} disabled={!canManage} onChange={(e) => setForm({ ...form, allowAnyStaff: e.target.checked })} />
             مشتری بتواند هر پرسنلی را انتخاب کند
           </label>
-          <Button type="submit">ذخیره</Button>
+          {canManage ? (
+            <DialogActions>
+              <Button type="submit">ذخیره</Button>
+            </DialogActions>
+          ) : null}
         </form>
       </Card>
       <Card>
         <h2 className="text-lg font-bold">تعطیلی</h2>
-        <p className="mt-1 text-sm text-muted">روزی که نوبت داده نمی‌شود.</p>
+        <p className="mt-1 text-sm text-muted">روزی که نوبت داده نمی‌شود. نوبت‌های باز همان روز لغو می‌شوند.</p>
+        {canManage ? (
         <div className="mt-4 grid gap-3">
           <JalaliCalendar value={day} onChange={setDay} />
           <Field label="یادداشت"><TextInput value={note} onChange={(e) => setNote(e.target.value)} /></Field>
@@ -157,6 +158,8 @@ function SettingsPage() {
               const res = await addHolidayFn({ data: { businessId, date: day, note, staffId } });
               if (!res.ok) toast.error(res.error);
               else {
+                const cancelled = Number(res.data?.cancelled ?? 0);
+                toast.success(cancelled > 0 ? `تعطیلی ثبت شد و ${faNum(cancelled)} نوبت لغو شد` : "تعطیلی ثبت شد");
                 setNote("");
                 load(businessId);
               }
@@ -165,11 +168,13 @@ function SettingsPage() {
             افزودن تعطیلی
           </Button>
         </div>
+        ) : <p className="mt-2 text-sm leading-6 text-muted">تعطیلی را فقط صاحب یا مدیر ثبت می‌کند.</p>}
         <ul className="mt-4 grid gap-2">
           {holidays.length === 0 ? <li className="text-sm text-muted">تعطیلی ثبت نشده.</li> : null}
           {holidays.map((item) => (
             <li key={item.id} className="flex items-center justify-between gap-2 rounded-xl bg-paper px-3 py-2 text-sm">
               <span>{formatDay(item.date)} · {item.staffId ? staff.find((person) => person.id === item.staffId)?.name ?? "پرسنل" : "همه"} {item.note}</span>
+              {canManage ? (
               <Button
                 type="button"
                 variant="quiet"
@@ -181,6 +186,7 @@ function SettingsPage() {
               >
                 حذف
               </Button>
+              ) : null}
             </li>
           ))}
         </ul>
@@ -264,22 +270,24 @@ function HoursCard({ businessId, owner }: { businessId: string; owner: boolean }
         ))}
       </div>
       {owner ? (
-        <Button
-          type="button"
-          className="mt-4"
-          onClick={async () => {
-            const res = await saveShopHoursFn({
-              data: {
-                businessId,
-                days: days.filter((day) => day.enabled).map((day) => ({ weekday: day.weekday, startMin: toMin(day.start), endMin: toMin(day.end) })),
-              },
-            });
-            if (!res.ok) toast.error(res.error);
-            else toast.success("ساعت کاری ذخیره شد");
-          }}
-        >
-          ذخیره ساعت کاری
-        </Button>
+        <DialogActions>
+          <Button
+            type="button"
+            className="mt-4"
+            onClick={async () => {
+              const res = await saveShopHoursFn({
+                data: {
+                  businessId,
+                  days: days.filter((day) => day.enabled).map((day) => ({ weekday: day.weekday, startMin: toMin(day.start), endMin: toMin(day.end) })),
+                },
+              });
+              if (!res.ok) toast.error(res.error);
+              else toast.success("ساعت کاری ذخیره شد");
+            }}
+          >
+            ذخیره ساعت کاری
+          </Button>
+        </DialogActions>
       ) : null}
     </Card>
   );

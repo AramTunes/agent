@@ -28,7 +28,7 @@ import { Card, Empty, Skeleton } from "@/components/ui";
 import { reportsFn } from "@/lib/api";
 import { faNum, toman } from "@/lib/booking/fa";
 import { formatJalaliYmd } from "@/lib/booking/jalali";
-import { ymd } from "@/lib/booking/time";
+import { addDaysYmd, todayYmd } from "@/lib/booking/time";
 
 export const Route = createFileRoute("/panel/reports")({ component: ReportsPage });
 
@@ -65,6 +65,7 @@ type Orders = {
   average?: number;
   peakHour?: number;
   repeat?: number;
+  exact?: boolean;
   prev?: { total: number; revenue: number; cancelled?: number; average?: number; repeat?: number };
 };
 type ServiceStat = { label: string; revenue: number; cancelled: number; total: number };
@@ -76,6 +77,8 @@ type Visits = {
   clicks: number;
   converted?: number;
   prevConverted?: number;
+  unique?: number;
+  prevUnique?: number;
   dwellSeconds: number;
   dwellSamples: number;
   series: number[];
@@ -104,18 +107,6 @@ type Slice = {
   customers?: { fresh: number; returning: number };
   visits: Visits | null;
 };
-
-function todayYmd() {
-  const now = new Date();
-  return ymd(now.getFullYear(), now.getMonth() + 1, now.getDate());
-}
-
-function shiftYmd(day: string, delta: number) {
-  const [y, m, d] = day.split("-").map(Number);
-  const next = new Date(y, m - 1, d);
-  next.setDate(next.getDate() + delta);
-  return ymd(next.getFullYear(), next.getMonth() + 1, next.getDate());
-}
 
 function pct(part: number, whole: number) {
   if (!whole) return `${faNum(0)}٪`;
@@ -180,27 +171,39 @@ function Stat({ icon, label, value, hint, change }: { icon: ReactNode; label: st
 
 function ReportsPage() {
   const { businessId } = usePanel();
-  const today = todayYmd();
   const [preset, setPreset] = useState<(typeof presets)[number]["id"]>("30");
-  const [from, setFrom] = useState(shiftYmd(today, -29));
-  const [to, setTo] = useState(today);
+  const [zone, setZone] = useState("Asia/Tehran");
+  const [today, setToday] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [open, setOpen] = useState<"" | "menu" | "from" | "to">("");
-  const [overview, setOverview] = useState<Slice | null>(null);
   const [range, setRange] = useState<Slice | null>(null);
   const [kind, setKind] = useState("booking");
 
   useEffect(() => {
     if (!businessId) return;
     let live = true;
-    reportsFn({ data: { businessId, from, to, compare: preset !== "custom" } }).then((res) => {
+    reportsFn({ data: { businessId, from, to, compare: true } }).then((res) => {
       if (!live) return;
       if (!res.ok) {
         toast.error(res.error);
         return;
       }
+      const nextZone = res.data.timezone || "Asia/Tehran";
+      const nextToday = res.data.today || todayYmd(nextZone);
+      setZone(nextZone);
+      setToday(nextToday);
       setKind(res.data.kind || "booking");
-      setOverview(res.data.overview);
       setRange(res.data.range);
+      if (preset !== "custom") {
+        const days = presets.find((item) => item.id === preset)?.days ?? 30;
+        const nextTo = nextToday;
+        const nextFrom = addDaysYmd(nextToday, -(days - 1), nextZone);
+        if (from !== nextFrom || to !== nextTo) {
+          setFrom(nextFrom);
+          setTo(nextTo);
+        }
+      }
     });
     return () => {
       live = false;
@@ -211,18 +214,18 @@ function ReportsPage() {
     setPreset(id);
     setOpen("");
     if (!days) return;
-    setTo(todayYmd());
-    setFrom(shiftYmd(todayYmd(), -(days - 1)));
+    const day = today || todayYmd(zone);
+    setTo(day);
+    setFrom(addDaysYmd(day, -(days - 1), zone));
   }
 
   if (!businessId) return <Empty title="اول صفحه بسازید" body="گزارش‌ها بعد از ساخت صفحه اینجا دیده می‌شوند." />;
   const current = presets.find((item) => item.id === preset);
   const biz = range?.business ?? { total: 0, cancelled: 0, completed: 0, missed: 0, revenue: 0, series: [], done: [] };
   const visits = range?.visits;
-  const look = overview;
 
   return (
-    <div className="grid gap-6">
+        <div className="grid gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-extrabold">گزارشات</h1>
         <div className="relative">
@@ -266,55 +269,8 @@ function ReportsPage() {
         </div>
       ) : null}
 
-      {!range || !look ? <Skeleton className="h-40" /> : (
+      {!range ? <Skeleton className="h-40" /> : (
         <>
-          <Card>
-            <h2 className="text-lg font-extrabold">یک نگاه کلی</h2>
-            <p className="mt-1 text-xs text-muted">خلاصهٔ همان بازه‌ای که بالا انتخاب کرده‌اید. پیش‌فرض یک ماه اخیر است.</p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {look.visits ? (
-                <Card>
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
-                    {[
-                      ["بازدید", faNum(look.visits.views)],
-                      ["بازدیدکننده", faNum(look.visits.visitors)],
-                      ["کلیک", faNum(look.visits.clicks)],
-                      ["درصد تبدیل", pct(look.visits.converted ?? 0, look.visits.visitors)],
-                    ].map(([label, value]) => (
-                      <div key={label}>
-                        <dt className="text-xs text-muted">{label}</dt>
-                        <dd className="text-lg font-extrabold tabular-nums">{value}</dd>
-                      </div>
-                    ))}
-                  </dl>
-                  <DualSpark primary={look.visits.series} secondary={look.visits.visitorsSeries} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
-                </Card>
-              ) : null}
-              <Card>
-                <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
-                  {(kind === "booking"
-                    ? [
-                        ["نوبت", faNum(look.business.total)],
-                        ["تکمیل‌شده", faNum(look.business.completed)],
-                        ["لغوشده", faNum(look.business.cancelled)],
-                        ["درآمد", toman(look.business.revenue)],
-                      ]
-                    : [
-                        ["سفارش", faNum(look.orders?.total ?? 0)],
-                        ["درآمد", toman(look.orders?.revenue ?? 0)],
-                      ]
-                  ).map(([label, value]) => (
-                    <div key={label}>
-                      <dt className="text-xs text-muted">{label}</dt>
-                      <dd className="text-lg font-extrabold tabular-nums">{value}</dd>
-                    </div>
-                  ))}
-                </dl>
-                <DualSpark primary={kind === "booking" ? look.business.done : (look.orders?.series ?? [])} secondary={kind === "booking" ? look.business.series : (look.orders?.series ?? [])} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
-              </Card>
-            </div>
-          </Card>
-
           {kind === "booking" ? (
           <Card>
             <h2 className="text-lg font-extrabold">گزارشات کسب‌وکار</h2>
@@ -393,10 +349,10 @@ function ReportsPage() {
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Stat icon={<CalendarCheck className="size-4" />} label="کل سفارش‌ها" value={faNum(range.orders?.total ?? 0)} change={growth(range.orders?.total ?? 0, range.orders?.prev?.total)} />
               <Stat icon={<CalendarX2 className="size-4" />} label="سفارش لغوشده" value={faNum(range.orders?.cancelled ?? 0)} change={growth(range.orders?.cancelled ?? 0, range.orders?.prev?.cancelled, true)} />
-              <Stat icon={<Wallet className="size-4" />} label="درآمد" value={toman(range.orders?.revenue ?? 0)} hint="جمع سفارش‌هایی که لغو نشده‌اند." change={growth(range.orders?.revenue ?? 0, range.orders?.prev?.revenue)} />
+              <Stat icon={<Wallet className="size-4" />} label="درآمد" value={toman(range.orders?.revenue ?? 0)} change={growth(range.orders?.revenue ?? 0, range.orders?.prev?.revenue)} />
               <Stat icon={<Wallet className="size-4" />} label="میانگین مبلغ سفارش" value={toman(range.orders?.average ?? 0)} change={growth(range.orders?.average ?? 0, range.orders?.prev?.average)} />
-              <Stat icon={<Clock className="size-4" />} label="ساعت شلوغ سفارش" value={peakHour(range.salesHours)} />
-              <Stat icon={<Users className="size-4" />} label="تکرار خرید" value={faNum(range.orders?.repeat ?? 0)} hint="کسی که قبلاً خریده یا در این بازه بیش از یک سفارش داشته." change={growth(range.orders?.repeat ?? 0, range.orders?.prev?.repeat)} />
+              <Stat icon={<Clock className="size-4" />} label="ساعت شلوغ سفارش" value={peakHour(range.salesHours)} hint="اگر مشتری زمان تحویل داده باشد، همان ساعت است نه ساعت ثبت." />
+              <Stat icon={<Users className="size-4" />} label="تکرار خرید" value={faNum(range.orders?.repeat ?? 0)} hint="سفارش لغوشدهٔ قبلی کسی را تکراری نمی‌کند." change={growth(range.orders?.repeat ?? 0, range.orders?.prev?.repeat)} />
             </div>
             <Card className="mt-3">
               <div className="text-sm font-semibold">روند سفارش‌ها</div>
@@ -416,7 +372,7 @@ function ReportsPage() {
                 <Stat icon={<Eye className="size-4" />} label="کل بازدیدها" value={faNum(visits.views)} hint="هر بار باز شدن صفحه یک بازدید است." change={growth(visits.views, visits.prev?.views)} />
                 <Stat icon={<Users className="size-4" />} label="کل بازدیدکننده‌ها" value={faNum(visits.visitors)} hint="بازدیدکننده یکتا در هر روز." change={growth(visits.visitors, visits.prev?.visitors)} />
                 <Stat icon={<MousePointerClick className="size-4" />} label="کلیک روی بلوک‌ها" value={faNum(visits.clicks)} hint="کلیک مشتری روی بلوک‌های صفحه." change={growth(visits.clicks, visits.prev?.clicks)} />
-                <Stat icon={<Percent className="size-4" />} label="درصد تبدیل" value={pct(visits.converted ?? 0, visits.visitors)} hint={kind === "booking" ? "بازدیدکننده‌هایی که نوبت آنلاین گرفته‌اند." : "بازدیدکننده‌هایی که سفارش ثبت کرده‌اند."} change={growth(rateNum(visits.converted ?? 0, visits.visitors), visits.prev ? rateNum(visits.prevConverted ?? 0, visits.prev.visitors) : undefined)} />
+                <Stat icon={<Percent className="size-4" />} label="درصد تبدیل" value={pct(visits.converted ?? 0, visits.unique ?? 0)} hint={kind === "booking" ? "نوبت آنلاین که لغو نشده، تقسیم بر بازدیدکنندهٔ یکتا در کل بازه. یک نفر در چند روز یک بار است." : "سفارش لغونشده، تقسیم بر بازدیدکنندهٔ یکتا در کل بازه. یک نفر در چند روز یک بار است."} change={growth(rateNum(visits.converted ?? 0, visits.unique ?? 0), visits.prevUnique == null ? undefined : rateNum(visits.prevConverted ?? 0, visits.prevUnique))} />
                 <Stat icon={<Timer className="size-4" />} label="ماندن در صفحه" value={stayLabel(visits.dwellSeconds, visits.dwellSamples)} hint="میانگین زمانی که بازدیدکننده در صفحه مانده." />
               </div>
               <Card className="mt-3">
@@ -429,7 +385,7 @@ function ReportsPage() {
 
           <Card>
             <h2 className="text-lg font-extrabold">{kind === "booking" ? "پرفروش‌ترین زمان‌های نوبت" : "پرفروش‌ترین زمان‌های سفارش"}</h2>
-            {range.scheduled ? (
+            {(range.salesHours.length || range.salesDays.length) ? (
             <div className="mt-3 grid gap-3 lg:grid-cols-2">
               <Card>
                 <div className="flex items-center gap-2 text-sm font-semibold"><Clock className="size-4 text-[#ffa640]" />ساعت‌های کاری</div>
@@ -440,7 +396,7 @@ function ReportsPage() {
                 <Columns items={range.salesDays.map((item) => ({ label: dayNames[item.label] ?? "", value: item.value }))} />
               </Card>
             </div>
-            ) : <p className="mt-3 text-sm text-muted">ساعت کاری هنوز تنظیم نشده. بعد از تنظیم، فقط همان ساعت‌ها و روزها اینجا می‌آید.</p>}
+            ) : <p className="mt-3 text-sm text-muted">در این بازه نوبت یا سفارشی نیست و ساعت کاری هم تنظیم نشده.</p>}
           </Card>
 
           {visits ? (

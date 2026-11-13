@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Link2, Store, UserRound } from "lucide-react";
+import { Link2, Store } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Shell } from "@/components/shell";
 import { Button, Card, ErrorNote, Field, Skeleton, Stepper, TextInput } from "@/components/ui";
@@ -207,13 +207,16 @@ function StartPage() {
             ) : null}
             {phase === "page" && step === 1 ? (
               <div className="grid gap-3">
-                <Choice on={pageFor === "self"} onClick={() => { setPageFor("self"); setStep(2); }} title="برای خودم" text="صفحه با اسم خودتان ساخته می‌شود." />
-                <Choice on={pageFor === "business"} onClick={() => { setPageFor("business"); setStep(2); }} title="برای کسب‌وکارم" text="صفحه با اسم کسب‌وکار ساخته می‌شود." />
+                <Choice on={pageFor === "self"} onClick={() => { setPageFor("self"); setPageName((account.me?.profile.displayName || name).trim()); setError(""); setStep(2); }} title="برای خودم" text="صفحه با اسم خودتان ساخته می‌شود." />
+                <Choice on={pageFor === "business"} onClick={() => { setPageFor("business"); setPageName(""); setError(""); setStep(2); }} title="برای کسب‌وکارم" text="اسم کسب‌وکار را جدا می‌نویسید." />
               </div>
             ) : null}
-            {phase === "page" && step === 2 ? (
-              <Field label={pageFor === "business" ? "اسم کسب‌وکار" : "اسم صفحه"}>
-                <FieldBox icon={pageFor === "business" ? <Store className="size-4" /> : <UserRound className="size-4" />}>
+            {phase === "page" && step === 2 && pageFor === "self" ? (
+              <p className="text-sm leading-7">اسم صفحه همان اسم حساب است: <span className="font-bold">{(account.me?.profile.displayName || name).trim() || "نام شما"}</span></p>
+            ) : null}
+            {phase === "page" && step === 2 && pageFor !== "self" ? (
+              <Field label="اسم کسب‌وکار">
+                <FieldBox icon={<Store className="size-4" />}>
                   <input value={faNum(pageName)} onChange={(event) => setPageName(enDigits(event.target.value))} className="min-w-0 flex-1 bg-transparent text-sm outline-none" />
                 </FieldBox>
               </Field>
@@ -234,7 +237,7 @@ function StartPage() {
                 {error ? <ErrorNote>{error}</ErrorNote> : null}
                 <div className="flex gap-2">
                   <Button type="button" variant="quiet" onClick={() => { setError(""); setStep((value) => Math.max(0, value - 1)); }}>بازگشت</Button>
-                  {step === 2 ? <Button type="button" variant="signup" onClick={() => { if (pageName.trim().length < 2) setError("اسم صفحه را بنویسید"); else { setError(""); setStep(3); } }}>ادامه</Button> : null}
+                  {step === 2 ? <Button type="button" variant="signup" onClick={() => { const own = (account.me?.profile.displayName || name).trim(); if (pageFor === "self") { if (own.length < 2) setError("اول نام خودتان را بنویسید"); else { setPageName(own); setError(""); setStep(3); } } else if (pageName.trim().length < 2) setError("اسم کسب‌وکار را بنویسید"); else { setError(""); setStep(3); } }}>ادامه</Button> : null}
                   {step === 3 ? <Button type="button" variant="signup" disabled={pending} onClick={() => void finishPage()}>{pending ? "در حال ساخت" : "ساخت صفحه"}</Button> : null}
                 </div>
               </div>

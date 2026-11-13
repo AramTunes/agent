@@ -11,7 +11,6 @@ import (
 	"agent/internal/booking"
 )
 
-var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 var clockRe = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
@@ -43,10 +42,6 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 	}
 	if !s.rate("menu-order-phone:"+phone, 8, time.Hour) {
 		return nil, fail(429, "RATE", "چند لحظه بعد دوباره سفارش بده")
-	}
-	email := strings.TrimSpace(mustString(raw, "email"))
-	if email != "" && (len(email) > 80 || !emailRe.MatchString(email)) {
-		return nil, fail(400, "VALIDATION", "ایمیل معتبر نیست")
 	}
 	note := clip(strings.TrimSpace(mustString(raw, "note")), 300)
 	address := clip(strings.ReplaceAll(strings.TrimSpace(mustString(raw, "address")), "\n", " "), 200)
@@ -104,12 +99,11 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 			firstID = item.ID
 		}
 		amount, sure := definiteLine(item.PriceType, item.Price, line.qty)
-		if !sure {
-			priced = false
-		} else if currency == "" {
-			currency = item.Currency
-			total += amount
-		} else if item.Currency != currency {
+		cur := item.Currency
+		if cur == "" {
+			cur = "toman"
+		}
+		if !sure || cur != "toman" {
 			priced = false
 		} else {
 			total += amount
@@ -122,12 +116,7 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 			variants = append(variants, variant)
 		}
 	}
-	if !priced {
-		total = 0
-	}
-	if currency == "" {
-		currency = "toman"
-	}
+	currency = "toman"
 	payload, err := json.Marshal(stored)
 	if err != nil {
 		return nil, err
@@ -150,20 +139,22 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 		_, _ = s.db.Exec(`UPDATE customers SET address = ? WHERE id = ? AND address = ''`, address, customerID)
 	}
 	if _, err := s.db.Exec(`INSERT INTO menu_orders (id, business_id, item_id, item_title, variant_title, price, currency, customer_name, phone, email, when_kind, fulfill_at, note, status, created_at, address, lines, priced, customer_id, receipt_token) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)`,
-		id, b.ID, firstID, clip(summary, 80), clip(strings.Join(variants, "، "), 120), total, currency, name, phone, email, when, fulfill, note, now, address, string(payload), bint(priced), customerID, token); err != nil {
+		id, b.ID, firstID, clip(summary, 80), clip(strings.Join(variants, "، "), 120), total, currency, name, phone, "", when, fulfill, note, now, address, string(payload), bint(priced), customerID, token); err != nil {
 		return nil, err
 	}
 	whenText := "هرچه زودتر"
 	if when == "later" {
-		whenText = fulfill
+		whenText = fulfillLabel(fulfill)
 	}
 	body := name + "\nتلفن: " + phone + "\nآدرس: " + address + "\n" + clip(summary, 80) + "\n" + whenText
 	if note != "" {
 		body += "\nیادداشت: " + note
 	}
 	s.notify(s.db, s.orderWatchers(s.db, b.ID), b.ID, id, "menu_order", "سفارش جدید", body)
-	link := receiptLink(safeOrigin(mustString(raw, "origin")), token)
-	s.queueSMS(phone, customerReceiptText("order", link), id)
+	if smsReady() {
+		link := receiptLink(safeOrigin(mustString(raw, "origin")), token)
+		s.queueSMS(phone, customerReceiptText("order", link), id)
+	}
 	return map[string]any{"id": id, "receiptToken": token}, nil
 }
 
@@ -313,7 +304,7 @@ func (s *Service) ListOrders(userID string, raw map[string]any) (any, error) {
 	}
 	rows, err := s.db.Query(`
 		SELECT id, customer_name, phone, address, note, status, when_kind, fulfill_at, created_at, price, currency, priced, lines
-		FROM menu_orders WHERE business_id = ? ORDER BY created_at DESC LIMIT 100`, businessID)
+		FROM menu_orders WHERE business_id = ? ORDER BY created_at DESC`, businessID)
 	if err != nil {
 		return nil, err
 	}
@@ -568,6 +559,49 @@ func (s *Service) orderWatchers(q querier, businessID string) []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+func fulfillLabel(value string) string {
+	parts := strings.Fields(value)
+	if len(parts) == 0 {
+		return value
+	}
+	when, err := time.Parse("2006-01-02", parts[0])
+	if err != nil {
+		return value
+	}
+	jy, jm, jd := booking.ToJalali(when.Year(), int(when.Month()), when.Day())
+	months := []string{"فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"}
+	label := strconv.Itoa(jd) + " " + months[jm-1]
+	if jy > 0 {
+		label += " " + strconv.Itoa(jy)
+	}
+	if len(parts) > 1 {
+		label += "، " + parts[1]
+	}
+	return faDigits(label)
+}
+
+func faDigits(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		if r >= '0' && r <= '9' {
+			b.WriteRune('۰' + (r - '0'))
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func countableToman(price, priced int, currency string) (int, bool) {
+	if currency != "" && currency != "toman" {
+		return 0, false
+	}
+	if price <= 0 && priced == 0 {
+		return 0, false
+	}
+	return price, true
 }
 
 func minuteOpen(spans [][2]int, minute int) bool {

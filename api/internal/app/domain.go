@@ -9,7 +9,7 @@ import (
 	"agent/internal/booking"
 )
 
-const capacityFormula = "ظرفیت = جمع دقایق ساعت کاری منهای استراحت و روز تعطیل. اشغال‌شده = مدت خدمت به‌علاوه فاصله آماده‌سازی نوبت‌های در انتظار، تأییدشده و انجام‌شده. نوبت لغوشده یا عدم مراجعه ظرفیت را اشغال نمی‌کند. نوبت چندخدمتی در این نسخه محاسبه نمی‌شود."
+const capacityFormula = "ظرفیت = جمع دقایق ساعت کاری منهای استراحت و روز تعطیل. اشغال‌شده = مدت خدمت به‌علاوه فاصله آماده‌سازی نوبت‌های در انتظار و تأییدشده. نوبت انجام‌شده، لغوشده یا عدم مراجعه ظرفیت را اشغال نمی‌کند. نوبت چندخدمتی در این نسخه محاسبه نمی‌شود."
 
 type querier interface {
 	Exec(query string, args ...any) (sql.Result, error)
@@ -641,7 +641,18 @@ func (s *Service) UpdateProfile(userID string, raw map[string]any) (any, error) 
 	if _, err := s.db.Exec(`UPDATE profiles SET display_name = ? WHERE user_id = ?`, name, userID); err != nil {
 		return nil, err
 	}
-	_, _ = s.db.Exec(`UPDATE users SET name = ? WHERE id = ?`, name, userID)
+	if _, err := s.db.Exec(`UPDATE users SET name = ? WHERE id = ?`, name, userID); err != nil {
+		return nil, err
+	}
+	if _, ok := raw["avatar"]; ok {
+		avatar, err := cleanAvatar(raw["avatar"])
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.db.Exec(`UPDATE profiles SET avatar = ? WHERE user_id = ?`, avatar, userID); err != nil {
+			return nil, err
+		}
+	}
 	return s.me(userID)
 }
 
@@ -693,6 +704,116 @@ func (s *Service) insertBusiness(q querier, userID string, name, description, ca
 	}
 	_ = s.audit(q, userID, "create_business", "business", strPtr(businessID), strPtr(businessID), name)
 	return businessID, branchID, nil
+}
+
+func (s *Service) ensureOwnerStaff(q querier, businessID, userID string, linkAll bool) error {
+	if businessID == "" || userID == "" {
+		return nil
+	}
+	var name, phone string
+	_ = q.QueryRow(`SELECT display_name, phone FROM profiles WHERE user_id = ?`, userID).Scan(&name, &phone)
+	name = strings.TrimSpace(name)
+	if name == "" {
+		_ = q.QueryRow(`SELECT name FROM users WHERE id = ?`, userID).Scan(&name)
+		name = strings.TrimSpace(name)
+	}
+	if name == "" {
+		name = "صاحب کسب‌وکار"
+	}
+	var staffID string
+	err := q.QueryRow(`SELECT id FROM staff WHERE business_id = ? AND user_id = ? LIMIT 1`, businessID, userID).Scan(&staffID)
+	created := false
+	if err == sql.ErrNoRows && phone != "" {
+		err = q.QueryRow(`SELECT id FROM staff WHERE business_id = ? AND phone = ? AND COALESCE(user_id, '') = '' LIMIT 1`, businessID, phone).Scan(&staffID)
+		if err == nil {
+			if _, err = q.Exec(`UPDATE staff SET user_id = ? WHERE id = ?`, userID, staffID); err != nil {
+				return err
+			}
+		}
+	}
+	if staffID == "" {
+		var branch string
+		_ = q.QueryRow(`SELECT id FROM branches WHERE business_id = ? LIMIT 1`, businessID).Scan(&branch)
+		staffID = newID()
+		if _, err = q.Exec(`INSERT INTO staff (id, business_id, branch_id, user_id, name, title, active, phone) VALUES (?,?,?,?,?,'',1,?)`,
+			staffID, businessID, branch, userID, clip(name, 80), phone); err != nil {
+			return err
+		}
+		created = true
+	}
+	var hours int
+	_ = q.QueryRow(`SELECT COUNT(*) FROM working_hours WHERE staff_id = ?`, staffID).Scan(&hours)
+	if hours == 0 {
+		for _, weekday := range []int{6, 0, 1, 2, 3, 4} {
+			if _, err = q.Exec(`INSERT INTO working_hours (id, staff_id, weekday, start_min, end_min) VALUES (?,?,?,540,1080)`, newID(), staffID, weekday); err != nil {
+				return err
+			}
+		}
+	}
+	if !linkAll && !created {
+		return nil
+	}
+	rows, err := q.Query(`SELECT id FROM services WHERE business_id = ?`, businessID)
+	if err != nil {
+		return err
+	}
+	var serviceIDs []string
+	for rows.Next() {
+		var serviceID string
+		if err := rows.Scan(&serviceID); err != nil {
+			rows.Close()
+			return err
+		}
+		serviceIDs = append(serviceIDs, serviceID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, serviceID := range serviceIDs {
+		if _, err := q.Exec(`INSERT INTO staff_services (staff_id, service_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM staff_services WHERE staff_id = ? AND service_id = ?)`, staffID, serviceID, staffID, serviceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) linkOwnerToService(businessID, serviceID string) error {
+	var owner string
+	if err := s.db.QueryRow(`SELECT owner_user_id FROM businesses WHERE id = ?`, businessID).Scan(&owner); err != nil {
+		return err
+	}
+	if err := s.ensureOwnerStaff(s.db, businessID, owner, false); err != nil {
+		return err
+	}
+	var staffID string
+	if err := s.db.QueryRow(`SELECT id FROM staff WHERE business_id = ? AND user_id = ? LIMIT 1`, businessID, owner).Scan(&staffID); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO staff_services (staff_id, service_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM staff_services WHERE staff_id = ? AND service_id = ?)`, staffID, serviceID, staffID, serviceID)
+	return err
+}
+
+func (s *Service) backfillOwners() {
+	rows, err := s.db.Query(`SELECT id, owner_user_id FROM businesses`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type pair struct{ id, owner string }
+	var all []pair
+	for rows.Next() {
+		var item pair
+		if err := rows.Scan(&item.id, &item.owner); err != nil {
+			return
+		}
+		all = append(all, item)
+	}
+	rows.Close()
+	for _, item := range all {
+		_ = s.ensureOwnerStaff(s.db, item.id, item.owner, true)
+	}
 }
 
 func (s *Service) StartAccount(raw map[string]any) (any, error) {
@@ -773,7 +894,7 @@ func (s *Service) StartAccount(raw map[string]any) (any, error) {
 		}
 		return nil, fail(400, "AUTH", "حساب ساخته نشد. دوباره تلاش کنید.")
 	}
-	token, err := s.openSession(userID)
+	token, err := s.openSession(userID, deviceFrom(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -836,7 +957,7 @@ func (s *Service) RegisterPerson(raw map[string]any) (any, error) {
 		_, _ = s.db.Exec(`DELETE FROM users WHERE id = ?`, userID)
 		return nil, fail(400, "AUTH", "حساب ساخته نشد. دوباره تلاش کنید.")
 	}
-	token, err := s.openSession(userID)
+	token, err := s.openSession(userID, deviceFrom(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -856,8 +977,17 @@ func (s *Service) CreatePage(userID string, raw map[string]any) (any, error) {
 	if pageFor != "self" && pageFor != "business" {
 		return nil, fail(400, "VALIDATION", "مشخص کنید صفحه برای خودتان است یا کسب‌وکارتان")
 	}
+	var ownerName, phone string
+	_ = s.db.QueryRow(`SELECT display_name, phone FROM profiles WHERE user_id = ?`, userID).Scan(&ownerName, &phone)
+	ownerName = strings.TrimSpace(ownerName)
+	if pageFor == "self" {
+		if len([]rune(ownerName)) < 2 {
+			return nil, fail(400, "VALIDATION", "اول نام خودتان را در حساب بنویسید")
+		}
+		pageName = ownerName
+	}
 	if len([]rune(pageName)) < 2 {
-		return nil, fail(400, "VALIDATION", "اسم صفحه را بنویسید")
+		return nil, fail(400, "VALIDATION", "اسم کسب‌وکار را بنویسید")
 	}
 	var taken string
 	err = s.db.QueryRow(`SELECT user_id FROM profiles WHERE lower(username) = lower(?)`, username).Scan(&taken)
@@ -871,8 +1001,6 @@ func (s *Service) CreatePage(userID string, raw map[string]any) (any, error) {
 	if err := s.db.QueryRow(`SELECT id FROM categories WHERE id = ? AND active = 1`, categoryID).Scan(&cat); err != nil {
 		return nil, fail(400, "VALIDATION", "حوزه فعالیت را انتخاب کنید")
 	}
-	var phone string
-	_ = s.db.QueryRow(`SELECT phone FROM profiles WHERE user_id = ?`, userID).Scan(&phone)
 	page := clip(pageName, 80)
 	desc := ""
 	if pageFor == "self" {
@@ -885,8 +1013,11 @@ func (s *Service) CreatePage(userID string, raw map[string]any) (any, error) {
 			return err
 		}
 		id, _, err := s.insertBusiness(tx, userID, page, desc, categoryID, "", "", phone, "Asia/Tehran", false)
+		if err != nil {
+			return err
+		}
 		businessID = id
-		return err
+		return s.ensureOwnerStaff(tx, businessID, userID, true)
 	})
 	if err != nil {
 		if isUnique(err) {
@@ -949,8 +1080,11 @@ func (s *Service) CreateBusiness(userID string, raw map[string]any) (any, error)
 		_ = tx.QueryRow(`SELECT name FROM users WHERE id = ?`, userID).Scan(&uname)
 		_, _ = tx.Exec(`INSERT INTO profiles (user_id, display_name, created_at) VALUES (?,?,?) ON CONFLICT(user_id) DO NOTHING`, userID, clip(uname, 80), s.now().UTC().Format(time.RFC3339))
 		bid, _, err := s.insertBusiness(tx, userID, name, desc, categoryID, city, address, phone, timezone, false)
+		if err != nil {
+			return err
+		}
 		id = bid
-		return err
+		return s.ensureOwnerStaff(tx, id, userID, true)
 	})
 	if err != nil {
 		return nil, err
@@ -1003,7 +1137,7 @@ func (s *Service) CreateDemo(userID string) (any, error) {
 				}
 			}
 		}
-		return nil
+		return s.ensureOwnerStaff(tx, bid, userID, true)
 	})
 	if err != nil {
 		return nil, err

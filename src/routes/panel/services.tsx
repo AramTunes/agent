@@ -3,7 +3,7 @@ import { ImagePlus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
-import { Badge, Button, Card, Empty, Field, Area, Skeleton, TextInput } from "@/components/ui";
+import { Badge, Button, Card, DialogActions, Empty, Field, Area, Skeleton, TextInput } from "@/components/ui";
 import { minutesLabel, toman } from "@/lib/booking/fa";
 import { fitImage } from "@/lib/fit-image";
 import { manageBusinessFn, deleteServiceFn, saveServiceFn } from "@/lib/api";
@@ -102,9 +102,9 @@ function ServicesPage() {
             <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
             در صفحه عمومی نمایش داده شود
           </label>
-          <div className="flex gap-2">
-            <Button type="submit" disabled={saving}>{saving ? "در حال ذخیره" : "ذخیره"}</Button>
+          <DialogActions>
             {form.id ? <Button type="button" variant="quiet" onClick={() => setForm(blank)}>انصراف</Button> : null}
+            <Button type="submit" disabled={saving}>{saving ? "در حال ذخیره" : "ذخیره"}</Button>
             {form.id ? (
               <Button
                 type="button"
@@ -126,7 +126,7 @@ function ServicesPage() {
                 حذف
               </Button>
             ) : null}
-          </div>
+          </DialogActions>
         </form>
       </Card>
       )}

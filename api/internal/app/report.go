@@ -1,7 +1,9 @@
 package app
 
 import (
+	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"agent/internal/booking"
@@ -55,8 +57,8 @@ func (s *Service) Reports(userID string, raw map[string]any) (any, error) {
 	slice := s.reportSlice(businessID, ownStaff, from, to, compare, loc, kind)
 	return map[string]any{
 		"from": from, "to": to, "compare": compare, "staff": role == "staff", "kind": kind,
-		"overview": slice,
-		"range":    slice,
+		"timezone": b.Timezone, "today": today,
+		"range": slice,
 	}, nil
 }
 
@@ -77,12 +79,17 @@ func (s *Service) reportSlice(businessID, ownStaff, from, to string, compare boo
 	days := daysBetween(from, to, loc)
 	biz, hours, weekdays := s.bookingStats(businessID, ownStaff, from, to, days, loc)
 	openHours, openDays := s.openSchedule(businessID)
+	if kind != "booking" {
+		if shopHours, shopDays := s.shopSchedule(businessID); len(shopHours) > 0 || len(shopDays) > 0 {
+			openHours, openDays = shopHours, shopDays
+		}
+	}
 	out := map[string]any{
 		"from": from, "to": to,
 		"business":    biz,
 		"salesHours":  packHours(hours, openHours),
 		"salesDays":   packDays(weekdays, openDays),
-		"scheduled":   len(openHours) > 0,
+		"scheduled":   len(openHours) > 0 || len(openDays) > 0,
 		"topServices": s.topNames(businessID, ownStaff, from, to, loc, "service"),
 		"topStaff":    s.topNames(businessID, ownStaff, from, to, loc, "staff"),
 		"services":    s.serviceBreakdown(businessID, ownStaff, from, to, loc),
@@ -105,6 +112,7 @@ func (s *Service) reportSlice(businessID, ownStaff, from, to string, compare boo
 		} else if orders, ok := out["orders"].(map[string]any); ok {
 			visits["converted"] = orders["total"]
 		}
+		visits["unique"] = s.uniqueVisitors(businessID, from, to)
 		out["visits"] = visits
 	} else {
 		out["visits"] = nil
@@ -137,6 +145,7 @@ func (s *Service) reportSlice(businessID, ownStaff, from, to string, compare boo
 			}
 			visits["prevConverted"] = prevOrders["total"]
 		}
+		visits["prevUnique"] = s.uniqueVisitors(businessID, prevFrom, prevTo)
 	} else if kind != "booking" {
 		prevOrders, _, _ := s.orderStats(businessID, prevFrom, prevTo, prevDays, loc)
 		if orders, ok := out["orders"].(map[string]any); ok {
@@ -151,7 +160,7 @@ func (s *Service) reportSlice(businessID, ownStaff, from, to string, compare boo
 
 func daysBetween(from, to string, loc *time.Location) []string {
 	out := []string{}
-	for day := from; day <= to && len(out) < 400; day = booking.AddDaysYMD(day, 1, loc) {
+	for day := from; day <= to && len(out) < 8000; day = booking.AddDaysYMD(day, 1, loc) {
 		out = append(out, day)
 		if day == to {
 			break
@@ -160,19 +169,32 @@ func daysBetween(from, to string, loc *time.Location) []string {
 	return out
 }
 
-func (s *Service) bookingStats(businessID, ownStaff, from, to string, days []string, loc *time.Location) (map[string]any, []int, []int) {
-	index := map[string]int{}
-	for i, day := range days {
-		index[day] = i
+func bucketIndex(days []string) (map[string]int, int) {
+	n := len(days)
+	buckets := n
+	if buckets > 366 {
+		buckets = 366
 	}
-	series := make([]int, len(days))
-	doneSeries := make([]int, len(days))
+	index := map[string]int{}
+	if n == 0 {
+		return index, 0
+	}
+	for i, day := range days {
+		index[day] = i * buckets / n
+	}
+	return index, buckets
+}
+
+func (s *Service) bookingStats(businessID, ownStaff, from, to string, days []string, loc *time.Location) (map[string]any, []int, []int) {
+	index, n := bucketIndex(days)
+	series := make([]int, n)
+	doneSeries := make([]int, n)
 	hours := make([]int, 24)
 	weekdays := make([]int, 7)
 	total, cancelled, completed, missed, revenue := 0, 0, 0, 0, 0
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
-	query := `SELECT b.status, b.starts_at, COALESCE(sv.price_toman, 0)
+	query := `SELECT b.status, b.starts_at, COALESCE(b.price_toman, 0)
 		FROM bookings b LEFT JOIN services sv ON sv.id = b.service_id
 		WHERE b.business_id = ? AND b.starts_at >= ? AND b.starts_at < ?`
 	args := []any{businessID, start, end}
@@ -206,6 +228,8 @@ func (s *Service) bookingStats(businessID, ownStaff, from, to string, days []str
 			case "completed":
 				completed++
 				revenue += price
+			}
+			if status != "cancelled" && status != "no_show" {
 				hours[local.Hour()]++
 				weekdays[int(local.Weekday())]++
 			}
@@ -225,13 +249,11 @@ func (s *Service) bookingStats(businessID, ownStaff, from, to string, days []str
 }
 
 func (s *Service) visitStats(businessID, from, to string, days []string, loc *time.Location) map[string]any {
-	index := map[string]int{}
-	for i, day := range days {
-		index[day] = i
-	}
-	viewsSeries := make([]int, len(days))
-	visitorSeries := make([]int, len(days))
+	index, n := bucketIndex(days)
+	viewsSeries := make([]int, n)
+	visitorSeries := make([]int, n)
 	views, visitors := 0, 0
+	weekdays := make([]int, 7)
 	rows, err := s.db.Query(`SELECT day, views, visitors FROM page_view_days WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, from, to)
 	if err == nil {
 		for rows.Next() {
@@ -243,8 +265,11 @@ func (s *Service) visitStats(businessID, from, to string, days []string, loc *ti
 			views += v
 			visitors += u
 			if i, ok := index[day]; ok {
-				viewsSeries[i] = v
-				visitorSeries[i] = u
+				viewsSeries[i] += v
+				visitorSeries[i] += u
+			}
+			if len(day) >= 10 {
+				weekdays[booking.WeekdayOfYMD(day, loc)] += v
 			}
 		}
 		rows.Close()
@@ -263,10 +288,6 @@ func (s *Service) visitStats(businessID, from, to string, days []string, loc *ti
 			}
 		}
 		hrows.Close()
-	}
-	weekdays := make([]int, 7)
-	for day, i := range index {
-		weekdays[booking.WeekdayOfYMD(day, loc)] += viewsSeries[i]
 	}
 	return map[string]any{
 		"views": views, "visitors": visitors, "clicks": clicks,
@@ -341,6 +362,32 @@ func (s *Service) openSchedule(businessID string) ([]int, []int) {
 	return keysOf(hours), keysOf(days)
 }
 
+func (s *Service) shopSchedule(businessID string) ([]int, []int) {
+	hours := map[int]bool{}
+	days := map[int]bool{}
+	rows, err := s.db.Query(`SELECT weekday, start_min, end_min FROM shop_hours WHERE business_id = ?`, businessID)
+	if err != nil {
+		return nil, nil
+	}
+	for rows.Next() {
+		var weekday, start, end int
+		if rows.Scan(&weekday, &start, &end) != nil {
+			continue
+		}
+		if weekday >= 0 && weekday < 7 {
+			days[weekday] = true
+		}
+		for minute := start; minute < end; minute += 60 {
+			hour := minute / 60
+			if hour >= 0 && hour < 24 {
+				hours[hour] = true
+			}
+		}
+	}
+	rows.Close()
+	return keysOf(hours), keysOf(days)
+}
+
 func keysOf(set map[int]bool) []int {
 	out := make([]int, 0, len(set))
 	for i := 0; i < 24; i++ {
@@ -352,6 +399,13 @@ func keysOf(set map[int]bool) []int {
 }
 
 func packHours(counts []int, hours []int) []map[string]any {
+	if len(hours) == 0 {
+		for i, n := range counts {
+			if n > 0 {
+				hours = append(hours, i)
+			}
+		}
+	}
 	out := []map[string]any{}
 	for _, hour := range hours {
 		value := 0
@@ -367,6 +421,13 @@ func packDays(counts []int, days []int) []map[string]any {
 	out := []map[string]any{}
 	order := []int{6, 0, 1, 2, 3, 4, 5}
 	open := map[int]bool{}
+	if len(days) == 0 {
+		for i, n := range counts {
+			if n > 0 {
+				open[i] = true
+			}
+		}
+	}
 	for _, day := range days {
 		open[day] = true
 	}
@@ -387,7 +448,13 @@ func (s *Service) onlineBookings(businessID, from, to string, loc *time.Location
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
 	var n int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE business_id = ? AND source = 'online' AND starts_at >= ? AND starts_at < ?`, businessID, start, end).Scan(&n)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM bookings WHERE business_id = ? AND source = 'online' AND status <> 'cancelled' AND starts_at >= ? AND starts_at < ?`, businessID, start, end).Scan(&n)
+	return n
+}
+
+func (s *Service) uniqueVisitors(businessID, from, to string) int {
+	var n int
+	_ = s.db.QueryRow(`SELECT COUNT(DISTINCT visitor) FROM page_view_visitors WHERE business_id = ? AND day >= ? AND day <= ?`, businessID, from, to).Scan(&n)
 	return n
 }
 
@@ -428,44 +495,45 @@ func (s *Service) pairQuery(query string, args ...any) []map[string]any {
 }
 
 func (s *Service) orderStats(businessID, from, to string, days []string, loc *time.Location) (map[string]any, []int, []int) {
-	index := map[string]int{}
-	for i, day := range days {
-		index[day] = i
-	}
-	series := make([]int, len(days))
+	index, n := bucketIndex(days)
+	series := make([]int, n)
 	hours := make([]int, 24)
 	weekdays := make([]int, 7)
 	total, revenue, cancelled, pricedCount := 0, 0, 0, 0
+	exact := true
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
-	rows, err := s.db.Query(`SELECT created_at, price, status, priced FROM menu_orders WHERE business_id = ? AND created_at >= ? AND created_at < ?`, businessID, start, end)
+	rows, err := s.db.Query(`SELECT created_at, COALESCE(fulfill_at, ''), price, status, priced, currency FROM menu_orders WHERE business_id = ? AND created_at >= ? AND created_at < ?`, businessID, start, end)
 	if err == nil {
 		for rows.Next() {
-			var at, status string
+			var at, fulfill, status, currency string
 			var price, priced int
-			if rows.Scan(&at, &price, &status, &priced) != nil {
+			if rows.Scan(&at, &fulfill, &price, &status, &priced, &currency) != nil {
 				continue
 			}
-			when, err := time.Parse(time.RFC3339Nano, at)
-			if err != nil {
-				when, err = time.Parse(time.RFC3339, at)
-			}
-			if err != nil {
+			created, ok := parseInstant(at)
+			if !ok {
 				continue
 			}
 			if status == "cancelled" {
 				cancelled++
 				continue
 			}
-			local := when.In(loc)
+			local := created.In(loc)
 			day := booking.TodayYMD(loc, local)
 			total++
-			if priced != 0 {
-				revenue += price
+			if amount, counted := countableToman(price, priced, currency); counted {
+				revenue += amount
 				pricedCount++
+			} else {
+				exact = false
 			}
-			hours[local.Hour()]++
-			weekdays[int(local.Weekday())]++
+			busy := local
+			if when, ok := parseLocalClock(fulfill, loc); ok {
+				busy = when
+			}
+			hours[busy.Hour()]++
+			weekdays[int(busy.Weekday())]++
 			if i, ok := index[day]; ok {
 				series[i]++
 			}
@@ -483,7 +551,7 @@ func (s *Service) orderStats(businessID, from, to string, days []string, loc *ti
 		}
 	}
 	return map[string]any{
-		"total": total, "revenue": revenue, "series": series,
+		"total": total, "revenue": revenue, "series": series, "exact": exact,
 		"cancelled": cancelled, "average": average, "peakHour": peak, "repeat": s.repeatBuyers(businessID, start, end),
 	}, hours, weekdays
 }
@@ -517,7 +585,7 @@ func (s *Service) topItems(businessID, from, to string, loc *time.Location) []ma
 			}
 			continue
 		}
-		if title != "" {
+		if title != "" && !strings.Contains(title, "مورد دیگر") {
 			counts[title]++
 		}
 	}
@@ -536,19 +604,40 @@ func (s *Service) topItems(businessID, from, to string, loc *time.Location) []ma
 	return out
 }
 
+func parseInstant(value string) (time.Time, bool) {
+	if t, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
+func parseLocalClock(value string, loc *time.Location) (time.Time, bool) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04", value, loc); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 func (s *Service) repeatBuyers(businessID, start, end string) int {
-	rows, err := s.db.Query(`SELECT phone, MIN(created_at), SUM(CASE WHEN created_at >= ? AND created_at < ? AND status <> 'cancelled' THEN 1 ELSE 0 END) FROM menu_orders WHERE business_id = ? GROUP BY phone`, start, end, businessID)
+	rows, err := s.db.Query(`SELECT phone, MIN(CASE WHEN status <> 'cancelled' THEN created_at END), SUM(CASE WHEN created_at >= ? AND created_at < ? AND status <> 'cancelled' THEN 1 ELSE 0 END) FROM menu_orders WHERE business_id = ? GROUP BY phone`, start, end, businessID)
 	if err != nil {
 		return 0
 	}
 	repeat := 0
 	for rows.Next() {
-		var phone, first string
+		var phone string
+		var first sql.NullString
 		var inRange int
-		if rows.Scan(&phone, &first, &inRange) != nil || phone == "" || inRange == 0 {
+		if rows.Scan(&phone, &first, &inRange) != nil || phone == "" || inRange == 0 || !first.Valid {
 			continue
 		}
-		if inRange > 1 || first < start {
+		if inRange > 1 || first.String < start {
 			repeat++
 		}
 	}
@@ -560,7 +649,7 @@ func (s *Service) serviceBreakdown(businessID, ownStaff, from, to string, loc *t
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
 	query := `SELECT sv.name,
-		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(sv.price_toman, 0) ELSE 0 END),
+		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(b.price_toman, 0) ELSE 0 END),
 		SUM(CASE WHEN b.status = 'cancelled' THEN 1 ELSE 0 END),
 		COUNT(*)
 		FROM bookings b JOIN services sv ON sv.id = b.service_id
@@ -592,7 +681,7 @@ func (s *Service) staffBreakdown(businessID, ownStaff, from, to string, loc *tim
 	start := booking.ISO(booking.AtLocalMinute(from, 0, loc))
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
 	query := `SELECT st.id, st.name,
-		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(sv.price_toman, 0) ELSE 0 END),
+		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(b.price_toman, 0) ELSE 0 END),
 		SUM(CASE WHEN b.status = 'no_show' THEN 1 ELSE 0 END),
 		COUNT(*)
 		FROM bookings b JOIN staff st ON st.id = b.staff_id
@@ -716,7 +805,7 @@ func (s *Service) groupBreakdown(businessID, ownStaff, from, to string, loc *tim
 	end := booking.ISO(booking.AtLocalMinute(to, 1440, loc))
 	query := `SELECT CASE WHEN TRIM(c.group_name) = '' OR c.group_name = 'بدون گروه' THEN 'بدون گروه' ELSE c.group_name END,
 		COUNT(*),
-		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(sv.price_toman, 0) ELSE 0 END)
+		SUM(CASE WHEN b.status = 'completed' THEN COALESCE(b.price_toman, 0) ELSE 0 END)
 		FROM bookings b
 		JOIN customers c ON c.id = b.customer_id
 		LEFT JOIN services sv ON sv.id = b.service_id

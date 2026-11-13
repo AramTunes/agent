@@ -40,7 +40,7 @@ const emptySeries = { views: [] as number[], visitors: [] as number[], done: [] 
 const emptyStats = {
   views: 0, visitors: 0, clicks: 0,
   booked: 0, cancelled: 0, missed: 0, completed: 0, revenueToman: 0,
-  converted: 0, orders: 0, orderCancelled: 0, orderRevenue: 0, orderMoney: true,
+  converted: 0, orders: 0, orderCancelled: 0, orderRevenue: 0, orderMoney: true, uniqueVisitors: 0,
   prevViews: 0, prevRevenueToman: 0, prevCompleted: 0, prevOrders: 0, prevOrderRevenue: 0,
 };
 
@@ -119,7 +119,7 @@ function PanelHome() {
     };
   }, [businessId]);
 
-  async function settle(status: "completed" | "cancelled") {
+  async function settle(status: "completed" | "cancelled" | "no_show") {
     if (!pick) return;
     const reason = status === "cancelled" ? cancelReason.trim() : "";
     if (status === "cancelled" && reason.length < 2) {
@@ -298,7 +298,7 @@ function PanelHome() {
                 ["بازدید", faNum(stats?.views ?? 0)],
                 ["بازدیدکننده", faNum(stats?.visitors ?? 0)],
                 ["کلیک", faNum(stats?.clicks ?? 0)],
-                ["درصد تبدیل", rate(stats?.converted ?? 0, stats?.visitors ?? 0)],
+                ["درصد تبدیل", rate(stats?.converted ?? 0, stats?.uniqueVisitors ?? 0)],
               ].map(([label, value]) => (
                 <div key={label}>
                   <dt className="text-xs text-muted">{label}</dt>
@@ -311,6 +311,7 @@ function PanelHome() {
               <span className="flex items-center gap-1.5"><i className="size-2 rounded-full bg-[#f7f7f7]" />بازدیدکننده</span>
             </div>
             <DualSpark primary={stats?.series.views ?? []} secondary={stats?.series.visitors ?? []} primaryColor="#ffa640" secondaryColor="#f7f7f7" />
+            <p className="mt-2 text-xs leading-5 text-muted">{ordersMode ? "سفارش لغونشده تقسیم بر بازدیدکنندهٔ یکتا در این ماه. یک نفر چند روز یک بار است." : "نوبت آنلاین که لغو نشده تقسیم بر بازدیدکنندهٔ یکتا در این ماه. یک نفر چند روز یک بار است."}</p>
             <p className={`mt-2 text-xs font-semibold ${monthChange(stats?.views ?? 0, stats?.prevViews ?? 0).tone}`}>{monthChange(stats?.views ?? 0, stats?.prevViews ?? 0).text}</p>
           </Card>
           )}
@@ -320,7 +321,7 @@ function PanelHome() {
                 ? [
                     ["سفارش ثبت‌شده", faNum(stats?.orders ?? 0)],
                     ["سفارش لغوشده", faNum(stats?.orderCancelled ?? 0)],
-                    ["درآمد", stats?.orderMoney === false ? "قطعی نیست" : toman(stats?.orderRevenue ?? 0)],
+                    ["درآمد", toman(stats?.orderRevenue ?? 0)],
                     ["درصد لغو", rate(stats?.orderCancelled ?? 0, (stats?.orders ?? 0) + (stats?.orderCancelled ?? 0))],
                   ]
                 : [
@@ -384,9 +385,10 @@ function PanelHome() {
               دلیل لغو
               <TextInput value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="اگر لغو می‌کنید بنویسید" />
             </label>
-            <div className="flex gap-2">
-              <button type="button" className="inline-flex h-11 flex-1 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink" onClick={() => void settle("completed")}>انجام شد</button>
-              <button type="button" className="inline-flex h-11 flex-1 items-center justify-center rounded-full border border-line text-sm font-semibold text-[#e11d2e]" onClick={() => void settle("cancelled")}>لغو شد</button>
+            <div className="grid gap-2">
+              <button type="button" className="inline-flex h-11 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink" onClick={() => void settle("completed")}>انجام شد</button>
+              <button type="button" className="inline-flex h-11 items-center justify-center rounded-full border border-line text-sm font-semibold" onClick={() => void settle("no_show")}>نیامد</button>
+              <button type="button" className="inline-flex h-11 items-center justify-center rounded-full border border-line text-sm font-semibold text-[#e11d2e]" onClick={() => void settle("cancelled")}>لغو شد</button>
             </div>
           </div>
         </div>

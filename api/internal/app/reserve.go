@@ -210,7 +210,7 @@ SELECT b.id, b.business_id, b.service_id, b.staff_id, b.customer_id, b.customer_
        b.starts_at, b.ends_at, b.status, b.source, b.note, b.cancel_reason,
        s.name, st.name, biz.name, biz.slug, biz.timezone, biz.avatar,
        COALESCE(NULLIF(c.name, ''), b.customer_name, ''), COALESCE(NULLIF(c.phone, ''), b.customer_phone, ''), COALESCE(c.email, ''), COALESCE(c.customer_note, ''),
-       s.price_toman, s.duration_minutes
+       COALESCE(b.price_toman, s.price_toman), s.duration_minutes
 FROM bookings b
 JOIN services s ON s.id = b.service_id
 JOIN staff st ON st.id = b.staff_id
@@ -281,6 +281,19 @@ func (s *Service) memberIDs(q querier, businessID string) []string {
 	return ids
 }
 
+func (s *Service) bookingWatchers(q querier, businessID, staffID string) []string {
+	ids := s.memberIDs(q, businessID)
+	if staffID == "" {
+		return ids
+	}
+	var userID string
+	_ = q.QueryRow(`SELECT COALESCE(user_id, '') FROM staff WHERE id = ? AND business_id = ?`, staffID, businessID).Scan(&userID)
+	if userID != "" {
+		ids = append(ids, userID)
+	}
+	return ids
+}
+
 func (s *Service) customerOnline(q querier, businessID, userID string) (string, error) {
 	var name, email string
 	_ = q.QueryRow(`SELECT name, email FROM users WHERE id = ?`, userID).Scan(&name, &email)
@@ -299,9 +312,12 @@ func (s *Service) customerOnline(q querier, businessID, userID string) (string, 
 	if phone != "" {
 		var found, foundUser string
 		err = q.QueryRow(`SELECT id, COALESCE(user_id, '') FROM customers WHERE business_id = ? AND phone = ? ORDER BY created_at LIMIT 1`, businessID, phone).Scan(&found, &foundUser)
-		if err == nil && (foundUser == "" || foundUser == userID) {
-			_, err = q.Exec(`UPDATE customers SET user_id = ?, name = ?, phone = ? WHERE id = ?`, userID, display, phone, found)
-			return found, err
+		if err == nil {
+			if foundUser == "" || foundUser == userID {
+				_, err = q.Exec(`UPDATE customers SET user_id = ?, name = ?, phone = ? WHERE id = ?`, userID, display, phone, found)
+				return found, err
+			}
+			return found, nil
 		}
 	}
 	id = newID()
@@ -399,7 +415,7 @@ func (s *Service) BusinessBookings(userID string, raw map[string]any) (any, erro
 		from = booking.ISO(booking.AtLocalMinute(startDay, 0, loc))
 		to = booking.ISO(booking.AtLocalMinute(endDay, 1440, loc))
 	}
-	rows, err := s.db.Query(bookingSelect+` WHERE b.business_id = ? AND (? = '' OR b.status = ?) AND b.starts_at >= ? AND b.starts_at < ? AND (? = '' OR b.staff_id = ?) ORDER BY b.starts_at LIMIT 200`,
+	rows, err := s.db.Query(bookingSelect+` WHERE b.business_id = ? AND (? = '' OR b.status = ?) AND b.starts_at >= ? AND b.starts_at < ? AND (? = '' OR b.staff_id = ?) ORDER BY b.starts_at DESC`,
 		businessID, status, status, from, to, ownStaff, ownStaff)
 	if err != nil {
 		return nil, err

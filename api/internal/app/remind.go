@@ -95,6 +95,10 @@ func two(n int) string {
 	return itoa(n)
 }
 
+func smsReady() bool {
+	return strings.TrimSpace(os.Getenv("SMS_URL")) != ""
+}
+
 func deliverSMS(phone, text string) (string, string) {
 	endpoint := strings.TrimSpace(os.Getenv("SMS_URL"))
 	if endpoint == "" {

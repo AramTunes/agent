@@ -49,7 +49,7 @@ func (s *Service) ResolveFollowup(userID string, raw map[string]any) (any, error
 	staffID, _ := textOf(raw, "staffId", 80, "")
 	status, _ := textOf(raw, "status", 20, "")
 	reason, _ := textOf(raw, "reason", 200, "")
-	if status != "completed" && status != "cancelled" {
+	if status != "completed" && status != "cancelled" && status != "no_show" {
 		return nil, fail(400, "VALIDATION", "وضعیت را انتخاب کنید")
 	}
 	if status == "cancelled" && len([]rune(strings.TrimSpace(reason))) < 2 {
@@ -95,16 +95,26 @@ func (s *Service) ResolveFollowup(userID string, raw map[string]any) (any, error
 		if status == "cancelled" {
 			cancel = strings.TrimSpace(reason)
 		}
-		if _, err := tx.Exec(`UPDATE bookings SET service_id = ?, staff_id = ?, status = ?, cancel_reason = ?, updated_at = ? WHERE id = ?`, serviceID, staffID, status, cancel, now, bookingID); err != nil {
+		price := row.Price
+		serviceName := row.ServiceName
+		if serviceID != row.ServiceID {
+			if err := tx.QueryRow(`SELECT name, price_toman FROM services WHERE id = ? AND business_id = ?`, serviceID, row.BusinessID).Scan(&serviceName, &price); err != nil {
+				return fail(400, "VALIDATION", "خدمت را انتخاب کنید")
+			}
+		}
+		if _, err := tx.Exec(`UPDATE bookings SET service_id = ?, staff_id = ?, status = ?, cancel_reason = ?, price_toman = ?, updated_at = ? WHERE id = ?`, serviceID, staffID, status, cancel, price, now, bookingID); err != nil {
 			return err
 		}
-		titles := map[string]string{"cancelled": "نوبت لغو شد", "completed": "نوبت انجام شد"}
+		titles := map[string]string{"cancelled": "نوبت لغو شد", "completed": "نوبت انجام شد", "no_show": "عدم مراجعه ثبت شد"}
 		title := titles[status]
-		body := row.ServiceName
+		body := serviceName
 		if status == "cancelled" && cancel != "" {
 			body += " — " + cancel
 		}
-		ids := append(s.memberIDs(tx, row.BusinessID), row.CustomerUser.String)
+		ids := append(s.bookingWatchers(tx, row.BusinessID, staffID), row.CustomerUser.String)
+		if row.StaffID != "" && row.StaffID != staffID {
+			ids = append(ids, s.bookingWatchers(tx, row.BusinessID, row.StaffID)...)
+		}
 		s.notify(tx, ids, row.BusinessID, bookingID, "booking_"+status, title, body)
 		_ = s.audit(tx, userID, "booking_status", "booking", strPtr(bookingID), strPtr(row.BusinessID), status)
 		next, err := s.loadBooking(tx, bookingID)

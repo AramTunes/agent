@@ -67,14 +67,32 @@ func (s *Service) accountByPhone(phone string) (*accountRow, error) {
 	return &row, nil
 }
 
-func (s *Service) openSession(userID string) (string, error) {
+func (s *Service) openSession(userID, device string) (string, error) {
 	token := newToken()
-	_, err := s.db.Exec(`INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?,?,?)`,
-		hashToken(token), userID, s.now().Add(30*24*time.Hour).UTC().Format(time.RFC3339))
+	now := s.now().UTC()
+	stamp := now.Format(time.RFC3339)
+	if strings.TrimSpace(device) == "" {
+		device = "دستگاه"
+	}
+	_, err := s.db.Exec(`INSERT INTO sessions (token_hash, user_id, expires_at, id, created_at, last_seen, device) VALUES (?,?,?,?,?,?,?)`,
+		hashToken(token), userID, now.Add(30*24*time.Hour).Format(time.RFC3339), newID(), stamp, stamp, clip(device, 80))
 	if err != nil {
 		return "", err
 	}
 	return token, nil
+}
+
+func (s *Service) touchSession(hash string) {
+	now := s.now().UTC()
+	var seen string
+	_ = s.db.QueryRow(`SELECT COALESCE(last_seen, '') FROM sessions WHERE token_hash = ?`, hash).Scan(&seen)
+	if seen != "" {
+		if at, err := time.Parse(time.RFC3339, seen); err == nil && now.Sub(at) < time.Hour {
+			return
+		}
+	}
+	_, _ = s.db.Exec(`UPDATE sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ?`,
+		now.Format(time.RFC3339), now.Add(30*24*time.Hour).Format(time.RFC3339), hash)
 }
 
 func (s *Service) UserID(token string) (string, error) {
@@ -82,7 +100,8 @@ func (s *Service) UserID(token string) (string, error) {
 		return "", fail(401, "UNAUTHORIZED", "برای ادامه وارد شوید")
 	}
 	var userID, exp string
-	err := s.db.QueryRow(`SELECT user_id, expires_at FROM sessions WHERE token_hash = ?`, hashToken(token)).Scan(&userID, &exp)
+	hash := hashToken(token)
+	err := s.db.QueryRow(`SELECT user_id, expires_at FROM sessions WHERE token_hash = ?`, hash).Scan(&userID, &exp)
 	if err == sql.ErrNoRows {
 		return "", fail(401, "UNAUTHORIZED", "برای ادامه وارد شوید")
 	}
@@ -93,6 +112,7 @@ func (s *Service) UserID(token string) (string, error) {
 	if err != nil || s.now().After(until) {
 		return "", fail(401, "UNAUTHORIZED", "برای ادامه وارد شوید")
 	}
+	s.touchSession(hash)
 	return userID, nil
 }
 
@@ -286,7 +306,7 @@ func (s *Service) SignInPassword(raw map[string]any) (any, error) {
 	if !checkPassword(acc.PasswordHash, password) {
 		return nil, fail(400, "AUTH", "رمز عبور نادرست است")
 	}
-	token, err := s.openSession(acc.UserID)
+	token, err := s.openSession(acc.UserID, deviceFrom(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +334,7 @@ func (s *Service) SignInCode(raw map[string]any) (any, error) {
 	if err := s.consumeCode(phone, "login", code); err != nil {
 		return nil, err
 	}
-	token, err := s.openSession(acc.UserID)
+	token, err := s.openSession(acc.UserID, deviceFrom(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -360,10 +380,116 @@ func (s *Service) ResetPassword(raw map[string]any) (any, error) {
 	if _, err := s.db.Exec(`UPDATE profiles SET has_password = 1 WHERE user_id = ?`, acc.UserID); err != nil {
 		return nil, err
 	}
-	token, err := s.openSession(acc.UserID)
+	token, err := s.openSession(acc.UserID, deviceFrom(raw))
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"token": token}, nil
+}
+
+func deviceFrom(raw map[string]any) string {
+	value, _ := raw["device"].(string)
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "دستگاه"
+	}
+	return value
+}
+
+func DeviceLabel(ua string) string {
+	lower := strings.ToLower(ua)
+	kind := "دستگاه"
+	switch {
+	case strings.Contains(lower, "iphone"):
+		kind = "آیفون"
+	case strings.Contains(lower, "ipad"):
+		kind = "آیپد"
+	case strings.Contains(lower, "android"):
+		kind = "اندروید"
+	case strings.Contains(lower, "mac os"), strings.Contains(lower, "macintosh"):
+		kind = "مک"
+	case strings.Contains(lower, "windows"):
+		kind = "ویندوز"
+	case strings.Contains(lower, "linux"):
+		kind = "لینوکس"
+	}
+	browser := ""
+	switch {
+	case strings.Contains(lower, "edg/"):
+		browser = "اج"
+	case strings.Contains(lower, "chrome"), strings.Contains(lower, "crios"):
+		browser = "کروم"
+	case strings.Contains(lower, "firefox"):
+		browser = "فایرفاکس"
+	case strings.Contains(lower, "safari"):
+		browser = "سافاری"
+	}
+	if browser == "" {
+		return kind
+	}
+	return kind + " · " + browser
+}
+
+func (s *Service) ListSessions(token string) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	userID, err := s.UserID(token)
+	if err != nil {
+		return nil, err
+	}
+	hash := hashToken(token)
+	rows, err := s.db.Query(`SELECT token_hash, COALESCE(id, ''), COALESCE(device, ''), COALESCE(created_at, ''), COALESCE(last_seen, ''), expires_at FROM sessions WHERE user_id = ? ORDER BY last_seen DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	now := s.now()
+	for rows.Next() {
+		var tokenHash, id, device, created, seen, exp string
+		if err := rows.Scan(&tokenHash, &id, &device, &created, &seen, &exp); err != nil {
+			return nil, err
+		}
+		until, parseErr := time.Parse(time.RFC3339, exp)
+		if parseErr != nil || now.After(until) {
+			continue
+		}
+		if id == "" {
+			id = newID()
+			_, _ = s.db.Exec(`UPDATE sessions SET id = ? WHERE token_hash = ?`, id, tokenHash)
+		}
+		if device == "" {
+			device = "دستگاه"
+		}
+		out = append(out, map[string]any{
+			"id": id, "device": device, "createdAt": created, "lastSeen": seen, "current": tokenHash == hash,
+		})
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) RevokeSession(token string, raw map[string]any) (any, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	userID, err := s.UserID(token)
+	if err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(mustString(raw, "id"))
+	if id == "" {
+		return nil, fail(400, "VALIDATION", "دستگاه را انتخاب کنید")
+	}
+	var tokenHash string
+	err = s.db.QueryRow(`SELECT token_hash FROM sessions WHERE id = ? AND user_id = ?`, id, userID).Scan(&tokenHash)
+	if err == sql.ErrNoRows {
+		return nil, fail(404, "NOT_FOUND", "این دستگاه دیگر وارد نیست")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, tokenHash); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true, "current": tokenHash == hashToken(token)}, nil
 }
 

@@ -24,6 +24,7 @@ import { faNum } from "@/lib/booking/fa";
 import { formatWhen } from "@/lib/booking/format";
 import { focusNav } from "@/lib/business-focus";
 import { usePanelFollowups } from "@/lib/followups";
+import { isInboxNote, noteTo, type AppNote } from "@/lib/notes";
 import { signOut } from "@/lib/session";
 
 const nav = [
@@ -81,7 +82,7 @@ export function DesktopChrome() {
         businessId={current?.businessId ?? ""}
         name={account.me?.profile.displayName || "حساب"}
         phone={account.me?.profile.phone ?? ""}
-        image={current?.avatar || account.me?.profile.avatar || ""}
+        image={account.me?.profile.avatar || ""}
         unread={account.me?.unread ?? 0}
         personal={account.me?.profile.pageFor === "self" && current?.name === account.me?.profile.pageName}
         staff={current?.role === "staff"}
@@ -352,7 +353,7 @@ function DesktopSidebar({
 }
 
 function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessId: string; personal: boolean; staff: boolean; unread: number; onClose: () => void }) {
-  const [notes, setNotes] = useState<{ id: string; title: string; body: string; kind?: string; read: boolean }[] | null>(null);
+  const [notes, setNotes] = useState<AppNote[] | null>(null);
   const { follow, overdue, zone } = usePanelFollowups(businessId, personal, staff);
   function load() {
     notificationsFn().then((res) => {
@@ -362,11 +363,13 @@ function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessI
   useEffect(() => {
     load();
   }, []);
+  const inbox = notes?.filter((note) => isInboxNote(note.kind)) ?? [];
+  const system = notes?.filter((note) => !isInboxNote(note.kind)) ?? [];
   const shownUnread = notes?.filter((note) => !note.read).length ?? 0;
   const extra = notes ? Math.max(0, unread - shownUnread) : 0;
-  const empty = notes !== null && notes.length === 0 && follow.length === 0 && overdue.length === 0;
+  const systemEmpty = notes !== null && system.length === 0 && follow.length === 0 && overdue.length === 0;
   return (
-    <div className="absolute bottom-0 right-full z-50 mr-2 flex w-72 flex-col rounded-lg border border-line bg-card p-1 shadow-md">
+    <div className="absolute bottom-0 right-full z-50 mr-2 flex w-80 flex-col rounded-lg border border-line bg-card p-1 shadow-md">
       <div className="flex items-center justify-between px-2 py-1.5">
         <span className="text-xs font-medium text-muted">اعلان‌ها</span>
         <button
@@ -385,7 +388,13 @@ function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessI
       <div className="-mx-1 my-1 h-px bg-line" />
       <ul className="grid max-h-80 overflow-y-auto">
         {notes === null ? <li className="px-2 py-1.5 text-sm text-muted">در حال خواندن…</li> : null}
-        {empty ? <li className="px-2 py-1.5 text-sm text-muted">اعلانی نیست.</li> : null}
+        <li className="px-2 pt-1 text-xs font-semibold text-muted">ثبت سفارش و نوبت</li>
+        {notes !== null && inbox.length === 0 ? <li className="px-2 py-1.5 text-xs text-muted">چیزی ثبت نشده.</li> : null}
+        {inbox.map((note) => (
+          <li key={note.id}><BellNote note={note} onClose={onClose} /></li>
+        ))}
+        <li className="px-2 pt-2 text-xs font-semibold text-muted">سیستم و کسب‌وکار</li>
+        {systemEmpty ? <li className="px-2 py-1.5 text-xs text-muted">اعلانی نیست.</li> : null}
         {follow.map((item) => (
           <li key={item.id}>
             <Link to={item.to} onClick={onClose} className="block rounded-md bg-paper px-2 py-1.5">
@@ -403,27 +412,27 @@ function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessI
             </Link>
           </li>
         ))}
-        {notes?.map((note) => (
-          <li key={note.id} className={`rounded-md px-2 py-1.5 ${note.read ? "text-muted" : "bg-paper"}`}>
-            {note.kind === "menu_order" || note.kind === "booking_created" ? (
-              <Link to={note.kind === "menu_order" ? "/panel/orders" : "/panel/calendar"} onClick={onClose} className="block">
-                <div className="text-sm font-medium">{note.title}</div>
-                <p className="mt-0.5 whitespace-pre-line text-xs leading-5">{note.body}</p>
-              </Link>
-            ) : (
-              <>
-                <div className="text-sm font-medium">{note.title}</div>
-                <p className="mt-0.5 whitespace-pre-line text-xs leading-5">{note.body}</p>
-              </>
-            )}
-          </li>
+        {system.map((note) => (
+          <li key={note.id}><BellNote note={note} onClose={onClose} /></li>
         ))}
-        {extra > 0 ? <li className="px-2 py-1.5 text-xs text-muted">و {faNum(extra)} اعلان دیگر در صفحهٔ اعلان‌ها</li> : null}
+        {extra > 0 ? <li className="px-2 py-1.5 text-xs text-muted">و {faNum(extra)} اعلان خوانده‌نشدهٔ دیگر</li> : null}
       </ul>
       <div className="-mx-1 my-1 h-px bg-line" />
       <Link to="/me" className={popItem} onClick={onClose}>همه اعلان‌ها</Link>
     </div>
   );
+}
+
+function BellNote({ note, onClose }: { note: AppNote; onClose: () => void }) {
+  const to = noteTo(note.kind);
+  const body = (
+    <>
+      <div className="text-sm font-medium">{note.title}</div>
+      <p className="mt-0.5 whitespace-pre-line text-xs leading-5">{note.body}</p>
+    </>
+  );
+  if (!to) return <div className={`rounded-md px-2 py-1.5 ${note.read ? "text-muted" : "bg-paper"}`}>{body}</div>;
+  return <Link to={to} onClick={onClose} className={`block rounded-md px-2 py-1.5 ${note.read ? "text-muted" : "bg-paper"}`}>{body}</Link>;
 }
 
 function DesktopHeader({ title }: { title: string }) {

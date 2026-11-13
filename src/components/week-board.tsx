@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { AnimatedTabs } from "@/components/animated-tabs";
 import { AppWindow } from "@/components/panel-window";
 import { ScrollArea } from "@/components/scroll-area";
 import { Button, Card, DialogActions, Field, Skeleton, TextInput } from "@/components/ui";
@@ -33,12 +32,14 @@ export function WeekBoard({
   weekly,
   more,
   showStaff = false,
+  reloadToken = 0,
 }: {
   businessId: string;
   timezone: string;
   weekly: Span[];
   more?: ReactNode;
   showStaff?: boolean;
+  reloadToken?: number;
 }) {
   const zone = timezone || "Asia/Tehran";
   const today = todayYmd(zone);
@@ -61,7 +62,7 @@ export function WeekBoard({
     return () => {
       live = false;
     };
-  }, [businessId, day, reloadKey]);
+  }, [businessId, day, reloadKey, reloadToken]);
 
   const visible = (rows ?? []).filter((row) => row.status !== "cancelled");
   const range = rangeFor(weekly, selected.weekday, visible, zone);
@@ -78,8 +79,8 @@ export function WeekBoard({
 
   return (
     <Card className="min-w-0">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="font-extrabold">امروز و هفته پیش رو</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="min-w-0 font-extrabold">این هفته</h2>
         {more}
       </div>
       <DayTabs days={days} index={index} onPick={(next) => setDay(days[next]?.ymd ?? day)} />
@@ -128,44 +129,34 @@ function DayTabs({
   index,
   onPick,
 }: {
-  days: { name: string; date: string }[];
+  days: { name: string; short: string; date: string; num: string }[];
   index: number;
   onPick: (index: number) => void;
 }) {
-  const scroller = useRef<HTMLDivElement>(null);
-  const [more, setMore] = useState(false);
-
-  useEffect(() => {
-    const node = scroller.current;
-    if (!node) return;
-    const update = () => {
-      const max = node.scrollWidth - node.clientWidth;
-      setMore(max - Math.abs(node.scrollLeft) > 8);
-    };
-    update();
-    node.addEventListener("scroll", update, { passive: true });
-    const watcher = new ResizeObserver(update);
-    watcher.observe(node);
-    return () => {
-      node.removeEventListener("scroll", update);
-      watcher.disconnect();
-    };
-  }, [days.length]);
-
   return (
-    <div className="relative mt-3 min-w-0">
-      <div
-        ref={scroller}
-        className="w-full min-w-0 max-lg:overflow-x-auto max-lg:overscroll-x-contain max-lg:[scrollbar-width:none] max-lg:[&::-webkit-scrollbar]:hidden"
-      >
-        <AnimatedTabs
-          className="bg-card"
-          items={days.map((item) => ({ label: item.name, hint: item.date }))}
-          value={index}
-          onChange={onPick}
-        />
-      </div>
-      {more ? <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 w-10 bg-gradient-to-r from-card to-transparent lg:hidden" /> : null}
+    <div role="tablist" className="mt-3 grid grid-cols-7 gap-1 rounded-lg border border-line bg-paper p-1">
+      {days.map((item, itemIndex) => {
+        const active = index === itemIndex;
+        return (
+          <button
+            key={`${item.name}-${item.num}`}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            aria-label={`${item.name} ${item.date}`}
+            onClick={() => onPick(itemIndex)}
+            className="min-w-0"
+          >
+            <span className={`flex min-h-11 flex-col items-center justify-center rounded-md px-0.5 py-1 ${active ? "bg-ink" : ""}`}>
+              <span className={`max-w-full truncate text-xs leading-4 sm:text-sm ${active ? "font-semibold text-on-ink" : "text-ink"}`}>
+                <span className="sm:hidden">{item.short}</span>
+                <span className="hidden sm:inline">{item.name}</span>
+              </span>
+              <span className={`text-[11px] leading-4 sm:text-xs ${active ? "text-on-ink/80" : "text-muted"}`}>{item.num}</span>
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -241,7 +232,7 @@ function DayGrid({
   );
 }
 
-function VisitDialog({
+export function VisitDialog({
   booking,
   businessId,
   zone,
@@ -374,6 +365,8 @@ function VisitDialog({
   );
 }
 
+const WEEKDAY_SHORT = ["ی", "د", "س", "چ", "پ", "ج", "ش"];
+
 function weekDays(zone: string) {
   const today = todayYmd(zone);
   const weekday = civilInZone(zonedCivilToUtc({ ...parts(today), hour: 12, minute: 0 }, zone), zone).weekday;
@@ -386,7 +379,9 @@ function weekDays(zone: string) {
       ymd,
       weekday: civil.weekday,
       name: WEEKDAYS_FA[civil.weekday],
+      short: WEEKDAY_SHORT[civil.weekday] ?? "",
       date: `${faNum(jalali.jd)} ${jalaliMonthName(jalali.jm)}`,
+      num: faNum(jalali.jd),
     };
   });
 }

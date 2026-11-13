@@ -1,17 +1,18 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAccount, useBusinessId } from "@/components/account";
-import { PageMark } from "@/lib/page-avatar";
+import { PageMark, fitAvatar } from "@/lib/page-avatar";
 import { Shell } from "@/components/shell";
 import { Badge, Button, Card, Empty, Field, Skeleton, TextInput } from "@/components/ui";
 import { OtpField } from "@/components/otp-field";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { faNum, STATUS_FA } from "@/lib/booking/fa";
-import { formatWhen } from "@/lib/booking/format";
-import { availabilityFn, markReadFn, myBookingsFn, notificationsFn, rescheduleBookingFn, resetPhonePasswordFn, sendPhoneCodeFn, setBookingStatusFn, updateProfileFn } from "@/lib/api";
-import { adoptSession } from "@/lib/session";
-import { civilInZone, ymd } from "@/lib/booking/time";
+import { formatClock, formatDay, formatWhen } from "@/lib/booking/format";
+import { availabilityFn, markReadFn, myBookingsFn, notificationsFn, rescheduleBookingFn, resetPhonePasswordFn, revokeSessionFn, sendPhoneCodeFn, sessionsFn, setBookingStatusFn, updateProfileFn } from "@/lib/api";
+import { isInboxNote, noteTo, type AppNote } from "@/lib/notes";
+import { adoptSession, signOut } from "@/lib/session";
+import { addDaysYmd, todayYmd } from "@/lib/booking/time";
 import { usePanelFollowups } from "@/lib/followups";
 
 export const Route = createFileRoute("/me")({ component: MePage });
@@ -28,6 +29,7 @@ type Booking = {
   businessSlug?: string;
   avatar?: string;
   serviceId: string;
+  staffId: string;
   customerNote?: string;
 };
 
@@ -38,10 +40,11 @@ function MePage() {
   const personal = account.me?.profile.pageFor === "self" && current?.name === account.me?.profile.pageName;
   const { follow, overdue, zone } = usePanelFollowups(businessId, Boolean(personal), current?.role === "staff");
   const [bookings, setBookings] = useState<Booking[]>([]);
-  const [notes, setNotes] = useState<{ id: string; title: string; body: string; kind?: string; read: boolean; createdAt: string }[]>([]);
+  const [notes, setNotes] = useState<AppNote[]>([]);
   const [name, setName] = useState("");
   const [moveId, setMoveId] = useState("");
-  const [slots, setSlots] = useState<{ start: string }[]>([]);
+  const [moveDay, setMoveDay] = useState("");
+  const [slots, setSlots] = useState<{ start: string; taken?: boolean }[] | null>(null);
   const [passOpen, setPassOpen] = useState(false);
   const [passCode, setPassCode] = useState("");
   const [shownCode, setShownCode] = useState("");
@@ -49,6 +52,8 @@ function MePage() {
   const [confirm, setConfirm] = useState("");
   const [passError, setPassError] = useState("");
   const [passPending, setPassPending] = useState(false);
+  const [devices, setDevices] = useState<{ id: string; device: string; lastSeen: string; current: boolean }[]>([]);
+  const photoRef = useRef<HTMLInputElement>(null);
 
   function load() {
     myBookingsFn().then((res) => {
@@ -57,6 +62,20 @@ function MePage() {
     notificationsFn().then((res) => {
       if (res.ok) setNotes(res.data);
     });
+    sessionsFn().then((res) => {
+      if (res.ok) setDevices(res.data ?? []);
+    });
+  }
+
+  async function openMove(item: Booking, day: string) {
+    setMoveId(item.id);
+    setMoveDay(day);
+    setSlots(null);
+    const res = await availabilityFn({
+      data: { businessId: item.businessId, serviceId: item.serviceId, day, staffId: item.staffId, exceptBookingId: item.id },
+    });
+    const next = res.ok ? (res.data.slots ?? []) : [];
+    setSlots(next.filter((slot: { taken?: boolean; start: string }) => !slot.taken && slot.start !== item.startsAt));
   }
   useEffect(() => {
     if (!account.user) return;
@@ -104,23 +123,33 @@ function MePage() {
                   if (!res.ok) toast.error(res.error);
                   else { toast.success("نوبت لغو شد"); load(); }
                 }}>لغو</Button>
-                <Button variant="quiet" onClick={async () => {
-                  setMoveId(item.id);
-                  const c = civilInZone(new Date(item.startsAt), item.timezone);
-                  const day = ymd(c.year, c.month, c.day);
-                  const res = await availabilityFn({ data: { businessId: item.businessId, serviceId: item.serviceId, day, staffId: "" } });
-                  setSlots(res.ok ? res.data.slots : []);
-                }}>جابه‌جایی</Button>
+                <Button variant="quiet" onClick={() => void openMove(item, todayYmd(item.timezone))}>جابه‌جایی</Button>
               </div>
               {moveId === item.id ? (
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  {slots.slice(0, 12).map((slot) => (
-                    <button key={slot.start} type="button" className="min-h-11 rounded-xl border border-line text-sm" onClick={async () => {
-                      const res = await rescheduleBookingFn({ data: { bookingId: item.id, start: slot.start, staffId: null } });
-                      if (!res.ok) toast.error(res.error);
-                      else { toast.success("زمان عوض شد"); setMoveId(""); load(); }
-                    }}>{formatWhen(slot.start, item.timezone)}</button>
-                  ))}
+                <div className="mt-3 grid gap-3">
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {Array.from({ length: 14 }, (_, index) => addDaysYmd(todayYmd(item.timezone), index, item.timezone)).map((day) => (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => void openMove(item, day)}
+                        className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${day === moveDay ? "bg-ink text-on-ink" : "border border-line"}`}
+                      >
+                        {formatDay(day)}
+                      </button>
+                    ))}
+                  </div>
+                  {slots === null ? <p className="text-sm text-muted">در حال بررسی وقت‌ها</p> : null}
+                  {slots && slots.length === 0 ? <p className="text-sm text-muted">در این روز وقت آزادی نیست.</p> : null}
+                  <div className="grid grid-cols-3 gap-2">
+                    {(slots ?? []).map((slot) => (
+                      <button key={slot.start} type="button" className="min-h-11 rounded-xl border border-line text-sm" onClick={async () => {
+                        const res = await rescheduleBookingFn({ data: { bookingId: item.id, start: slot.start, staffId: item.staffId } });
+                        if (!res.ok) toast.error(res.error);
+                        else { toast.success("زمان عوض شد"); setMoveId(""); load(); }
+                      }}>{formatClock(slot.start, item.timezone)}</button>
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </Card>
@@ -154,6 +183,48 @@ function MePage() {
               if (!res.ok) toast.error(res.error);
               else { toast.success("حساب ذخیره شد"); account.reload(); }
             }}>
+              <input
+                ref={photoRef}
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (!file) return;
+                  const reader = new FileReader();
+                  reader.onload = () => {
+                    void fitAvatar(String(reader.result || "")).then(async (avatar) => {
+                      if (!avatar) {
+                        toast.error("این تصویر باز نشد");
+                        return;
+                      }
+                      const res = await updateProfileFn({ data: { displayName: name.trim() || account.me?.profile.displayName, avatar } });
+                      if (!res.ok) toast.error(res.error);
+                      else {
+                        toast.success("عکس حساب ذخیره شد");
+                        account.reload();
+                        window.dispatchEvent(new Event("agent-avatar"));
+                      }
+                    });
+                  };
+                  reader.readAsDataURL(file);
+                }}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="quiet" onClick={() => photoRef.current?.click()}>عکس صاحب حساب</Button>
+                {account.me?.profile.avatar ? (
+                  <Button type="button" variant="quiet" onClick={async () => {
+                    const res = await updateProfileFn({ data: { displayName: name.trim() || account.me?.profile.displayName, avatar: "" } });
+                    if (!res.ok) toast.error(res.error);
+                    else {
+                      account.reload();
+                      window.dispatchEvent(new Event("agent-avatar"));
+                    }
+                  }}>حذف عکس</Button>
+                ) : null}
+              </div>
+              <p className="text-xs leading-5 text-muted">این عکس مال خود شماست و با عکس صفحه کسب‌وکار فرق دارد. عکس صفحه را از تنظیمات صفحه عوض کنید.</p>
               <Field label="نام"><TextInput value={name} onChange={(e) => setName(e.target.value)} /></Field>
               <p className="text-sm leading-6">
                 <span className="text-muted">شماره موبایل</span>
@@ -262,12 +333,49 @@ function MePage() {
             {passError ? <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm text-danger">{passError}</p> : null}
           </Card>
           <Card>
+            <h2 className="font-bold">دستگاه‌های واردشده</h2>
+            <p className="mt-1 text-sm leading-6 text-muted">هر دستگاهی که با آن وارد شوید جدا می‌ماند. اگر ۳۰ روز از آن استفاده نکنید، خودش خارج می‌شود. خروج فقط همین دستگاه را می‌بندد.</p>
+            <ul className="mt-3 grid gap-2">
+              {devices.length === 0 ? <li className="text-sm text-muted">دستگاهی نیست.</li> : null}
+              {devices.map((item) => (
+                <li key={item.id} className="flex items-center justify-between gap-2 rounded-xl bg-paper px-3 py-2">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold">{item.device}{item.current ? " · این دستگاه" : ""}</span>
+                    {item.lastSeen ? <span className="block text-xs text-muted">آخرین استفاده {new Intl.DateTimeFormat("fa-IR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(item.lastSeen))}</span> : null}
+                  </span>
+                  <Button type="button" variant="quiet" onClick={async () => {
+                    const res = await revokeSessionFn({ data: { id: item.id } });
+                    if (!res.ok) {
+                      toast.error(res.error);
+                      return;
+                    }
+                    if (res.data.current) {
+                      await signOut();
+                      return;
+                    }
+                    setDevices((list) => list.filter((row) => row.id !== item.id));
+                  }}>خروج</Button>
+                </li>
+              ))}
+            </ul>
+          </Card>
+          <Card>
             <div className="flex items-center justify-between">
-              <h2 className="font-bold">اعلان‌های داخلی</h2>
+              <h2 className="font-bold">اعلان‌ها</h2>
               <button type="button" className="text-sm text-jade" onClick={() => markReadFn({ data: {} }).then(() => { load(); account.reload(); })}>خواندم</button>
             </div>
-            <ul className="mt-3 grid gap-3">
-              {notes.length === 0 && follow.length === 0 && overdue.length === 0 ? <li className="text-sm text-muted">اعلانی نیست.</li> : null}
+            <h3 className="mt-4 font-bold">ثبت سفارش و نوبت</h3>
+            <p className="mt-1 text-xs leading-5 text-muted">هر وقت مشتری نوبت یا سفارش ثبت کند، این‌جا می‌آید.</p>
+            <ul className="mt-2 grid gap-2">
+              {notes.filter((note) => isInboxNote(note.kind)).length === 0 ? <li className="text-sm text-muted">هنوز چیزی ثبت نشده.</li> : null}
+              {notes.filter((note) => isInboxNote(note.kind)).map((note) => (
+                <li key={note.id}><NoteRow note={note} /></li>
+              ))}
+            </ul>
+            <h3 className="mt-5 font-bold">سیستم و کسب‌وکار</h3>
+            <p className="mt-1 text-xs leading-5 text-muted">پیگیری، تغییر وضعیت و پیام‌های خود برنامه.</p>
+            <ul className="mt-2 grid gap-2">
+              {follow.length === 0 && overdue.length === 0 && notes.every((note) => isInboxNote(note.kind)) ? <li className="text-sm text-muted">اعلانی نیست.</li> : null}
               {follow.map((item) => (
                 <li key={item.id}>
                   <Link to={item.to} className="block rounded-xl bg-paper px-3 py-2">
@@ -288,28 +396,25 @@ function MePage() {
                   </Link>
                 </li>
               ))}
-              {notes.map((note) => (
-                <li key={note.id} className={note.read ? "text-muted" : ""}>
-                  {note.kind === "menu_order" || note.kind === "booking_created" ? (
-                    <Link to={note.kind === "menu_order" ? "/panel/orders" : "/panel/calendar"} className="block">
-                      <div className="font-semibold">{note.title}</div>
-                      <p className="whitespace-pre-line text-sm leading-6">{note.body}</p>
-                    </Link>
-                  ) : (
-                    <>
-                      <div className="font-semibold">{note.title}</div>
-                      <p className="whitespace-pre-line text-sm leading-6">{note.body}</p>
-                    </>
-                  )}
-                </li>
+              {notes.filter((note) => !isInboxNote(note.kind)).map((note) => (
+                <li key={note.id}><NoteRow note={note} /></li>
               ))}
-              {Math.max(0, (account.me?.unread ?? 0) - notes.filter((note) => !note.read).length) > 0 ? (
-                <li className="text-xs text-muted">بعضی اعلان‌های قدیمی‌تر در این فهرست نیستند. عدد بالا همهٔ خوانده‌نشده‌هاست.</li>
-              ) : null}
             </ul>
           </Card>
         </div>
       </div>
     </Shell>
   );
+}
+
+function NoteRow({ note }: { note: AppNote }) {
+  const to = noteTo(note.kind);
+  const body = (
+    <>
+      <div className="font-semibold">{note.title}</div>
+      <p className="whitespace-pre-line text-sm leading-6">{note.body}</p>
+    </>
+  );
+  if (!to) return <div className={note.read ? "text-muted" : ""}>{body}</div>;
+  return <Link to={to} className={`block rounded-xl bg-paper px-3 py-2 ${note.read ? "text-muted" : ""}`}>{body}</Link>;
 }

@@ -1,0 +1,41 @@
+{
+  "url": "http://127.0.0.1:8081/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "ایجنت — دستیار کسب‌وکار",
+      "hasCanvas": false,
+      "bodyTextLen": 1146,
+      "bodyTextHash": "8b5308dfaff960c98b95ee1702b390feb4b3fcebc27c7bc4e6b62c7523d7a6e4",
+      "bodyTextPrefix": "ایجنت کسب‌وکارها نوبت‌های من پنل کسب‌وکار روشن تیره شروع رایگان ",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "ایجنت — دستیار کسب‌وکار",
+      "hasCanvas": false,
+      "bodyTextLen": 1088,
+      "bodyTextHash": "1705897f2ec7c8a65264362ac2bad8c473e408055779897a5a3e9ee2f7e8c5c4",
+      "bodyTextPrefix": "ایجنت ورود دستیار کسب‌وکار کار کسب‌وکارت را آنلاین کن ایجنت صفحه",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-built-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-built.json",
+  "divergesFromBaseline": true,
+  "baselineReasons": [
+    "desktop: body text changed (840 -> 1146 chars, hash mismatch)",
+    "mobile: body text changed (782 -> 1088 chars, hash mismatch)"
+  ]
+}

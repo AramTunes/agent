@@ -52,7 +52,7 @@ import { fitImage } from "@/lib/fit-image";
 import { CustomerLink, DividerLine, addressKinds, contactKind, contactKinds, socialKinds, socialValueOk, videoWatch, type ContactItem } from "@/components/link-page";
 import { DesignStudio, DesktopDesign } from "@/components/page-design-studio";
 import { QrDialog } from "@/components/qr-share";
-import { defaultPageDesign, normalizeDesign, parseDesign, themeColors, type PageDesign } from "@/lib/page-design";
+import { defaultPageDesign, normalizeDesign, themeColors, type PageDesign } from "@/lib/page-design";
 import { fitsTopic, topicBlock } from "@/lib/business-focus";
 import { BookingFields, bookingPath } from "@/components/booking-block";
 import { MenuFields } from "@/components/menu-block";
@@ -110,6 +110,22 @@ function designKey(businessId: string) {
   return `agent.page-design.${businessId}`;
 }
 
+function designProblem(design: PageDesign) {
+  if (design.image.startsWith("data:") && design.image.length > 180000) return "تصویر پس‌زمینه بزرگ است. دوباره آپلود کنید تا مشتری همان طرح را ببیند";
+  if (design.video.startsWith("data:")) return "فیلم پس‌زمینه ذخیره نشد. دوباره آپلود کنید";
+  if (JSON.stringify(design).length > 450000) return "طراحی صفحه بزرگ است و برای مشتری ذخیره نشد";
+  return "";
+}
+
+function readDesignBody(body?: string) {
+  if (!body) return null;
+  try {
+    return normalizeDesign(JSON.parse(body) as Partial<PageDesign>);
+  } catch {
+    return null;
+  }
+}
+
 function storageKey(businessId: string) {
   return `agent.page-blocks.${businessId}`;
 }
@@ -147,6 +163,8 @@ function LinksPage() {
   const [design, setDesign] = useState<PageDesign>(defaultDesign);
   const [draft, setDraft] = useState<PageDesign>(defaultDesign);
   const designRef = useRef(defaultDesign);
+  const savedRef = useRef<{ blocks: Block[]; design: PageDesign }>({ blocks: [], design: defaultDesign });
+  const saveSeq = useRef(0);
   const [avatar, setAvatar] = useState("");
 
   useEffect(() => {
@@ -160,32 +178,58 @@ function LinksPage() {
     setReady(false);
     manageBusinessFn({ data: { businessId } }).then((res) => {
       if (!live) return;
-      let next: Block[] = [];
-      const remote = res.ok && Array.isArray(res.data?.pageBlocks) ? (res.data.pageBlocks as Array<{ type: string; body?: string }>) : null;
-      if (remote) next = remote.filter((item) => item.type !== "design") as Block[];
-      if (next.length === 0 && !remote?.some((item) => item.type === "design")) {
+      if (!res.ok) {
+        toast.error(res.error);
+        setReady(true);
+        return;
+      }
+      const remote = Array.isArray(res.data?.pageBlocks) ? (res.data.pageBlocks as Array<{ type: string; body?: string }>) : [];
+      const serverBlocks = remote.filter((item) => item.type !== "design") as Block[];
+      const designBody = remote.find((item) => item.type === "design")?.body;
+      const serverDesign = readDesignBody(designBody) ?? defaultDesign;
+      savedRef.current = { blocks: serverBlocks, design: serverDesign };
+      let next = serverBlocks;
+      let loaded = serverDesign;
+      let publishLocal = false;
+      if (!designBody || !readDesignBody(designBody)) {
+        const localDesign = readStoredDesign(businessId);
+        const problem = designProblem(localDesign);
+        if (problem && JSON.stringify(localDesign) !== JSON.stringify(defaultDesign)) {
+          toast.error(problem);
+          try { localStorage.removeItem(designKey(businessId)); } catch { /* keep the server copy */ }
+        } else if (JSON.stringify(localDesign) !== JSON.stringify(defaultDesign)) {
+          loaded = localDesign;
+          publishLocal = true;
+        }
+      }
+      if (serverBlocks.length === 0 && !designBody) {
         try {
           const raw = localStorage.getItem(storageKey(businessId));
           const parsed = raw ? (JSON.parse(raw) as Array<{ type: string }>) : [];
-          if (Array.isArray(parsed) && parsed.length) next = parsed.filter((item) => item.type !== "design") as Block[];
+          if (Array.isArray(parsed) && parsed.length) {
+            next = parsed.filter((item) => item.type !== "design") as Block[];
+            publishLocal = true;
+          }
         } catch {
-          next = [];
+          next = serverBlocks;
         }
       }
-      const designBody = remote?.find((item) => item.type === "design")?.body;
-      const loaded = designBody ? parseDesign(designBody) : readStoredDesign(businessId);
       designRef.current = loaded;
       setDesign(loaded);
       setDraft(loaded);
       blocksRef.current = next;
       setBlocks(next);
-      try {
-        localStorage.setItem(storageKey(businessId), JSON.stringify(next));
-        if (slug) localStorage.setItem(`agent.page-blocks.slug.${slug}`, JSON.stringify(next));
-      } catch {
-        /* preview can read the server copy */
+      if (!publishLocal) {
+        try {
+          localStorage.setItem(storageKey(businessId), JSON.stringify(next));
+          if (slug) localStorage.setItem(`agent.page-blocks.slug.${slug}`, JSON.stringify(next));
+          localStorage.setItem(designKey(businessId), JSON.stringify(loaded));
+        } catch {
+          /* server copy is what visitors see */
+        }
       }
       setReady(true);
+      if (publishLocal) publish(next, loaded);
     });
     return () => {
       live = false;
@@ -198,19 +242,53 @@ function LinksPage() {
     if (value) rememberPageAvatar(businessId, slug, value);
   }, [businessId, slug, sheet]);
 
+  function rememberSaved(nextBlocks: Block[], nextDesign: PageDesign) {
+    savedRef.current = { blocks: nextBlocks, design: nextDesign };
+    try {
+      localStorage.setItem(storageKey(businessId), JSON.stringify(nextBlocks));
+      if (slug) localStorage.setItem(`agent.page-blocks.slug.${slug}`, JSON.stringify(nextBlocks));
+      localStorage.setItem(designKey(businessId), JSON.stringify(nextDesign));
+    } catch {
+      /* the server copy is the one visitors see */
+    }
+  }
+
+  function restoreSaved() {
+    const saved = savedRef.current;
+    blocksRef.current = saved.blocks;
+    setBlocks(saved.blocks);
+    designRef.current = saved.design;
+    setDesign(saved.design);
+    setDraft(saved.design);
+  }
+
+  function publish(nextBlocks: Block[], nextDesign: PageDesign) {
+    const problem = designProblem(nextDesign);
+    if (problem) {
+      toast.error(problem);
+      restoreSaved();
+      return;
+    }
+    const seq = ++saveSeq.current;
+    const payload = [...nextBlocks, { id: "page-design", type: "design" as const, active: true, starred: false, body: JSON.stringify(nextDesign) }];
+    void updateBusinessFn({ data: { businessId, pageBlocks: payload } }).then((res) => {
+      if (seq !== saveSeq.current) return;
+      if (!res.ok) {
+        toast.error(res.error || "صفحه ذخیره نشد. مشتری هنوز طرح قبلی را می‌بیند");
+        restoreSaved();
+        return;
+      }
+      rememberSaved(nextBlocks, nextDesign);
+    });
+  }
+
   function persistDesign(next: PageDesign) {
     const clean = normalizeDesign(next);
     designRef.current = clean;
     setDesign(clean);
     setDraft(clean);
-    if (businessId) {
-      try {
-        localStorage.setItem(designKey(businessId), JSON.stringify(clean));
-      } catch {
-        /* server copy is enough */
-      }
-    }
-    commit((items) => items);
+    if (!businessId) return;
+    publish(blocksRef.current, clean);
   }
 
   function openDesign() {
@@ -223,16 +301,7 @@ function LinksPage() {
     blocksRef.current = next;
     setBlocks(next);
     if (!businessId) return;
-    try {
-      localStorage.setItem(storageKey(businessId), JSON.stringify(next));
-      if (slug) localStorage.setItem(`agent.page-blocks.slug.${slug}`, JSON.stringify(next));
-    } catch {
-      /* the server copy is the one that matters */
-    }
-    const payload = [...next, { id: "page-design", type: "design", active: true, starred: false, body: JSON.stringify(designRef.current) }];
-    void updateBusinessFn({ data: { businessId, pageBlocks: payload } }).then((res) => {
-      if (!res.ok) toast.error(res.error);
-    });
+    publish(next, designRef.current);
   }
 
   useEffect(() => {
@@ -717,7 +786,15 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
         event.preventDefault();
         setPending(true);
         void (async () => {
-          const payload: Record<string, unknown> = { businessId, ...form, description: form.description.slice(0, 100) };
+          const payload: Record<string, unknown> = {
+            businessId,
+            name: form.name,
+            description: form.description.slice(0, 100),
+            city: form.city,
+            phone: form.phone,
+            address: form.address,
+            timezone: form.timezone,
+          };
           if (cleared) {
             payload.avatar = "";
             try {
@@ -803,12 +880,12 @@ function PageSettings({ businessId, slug, onClose }: { businessId: string; slug:
         </span>
         <ChevronLeft className="size-4 shrink-0 text-muted" aria-hidden="true" />
       </Link>
-      <div className="mt-8 flex gap-2">
-        <button type="submit" disabled={pending} className="inline-flex h-11 min-w-0 flex-1 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink disabled:opacity-50">
-          {pending ? "در حال ذخیره" : "ذخیره"}
-        </button>
-        <button type="button" className="inline-flex h-11 min-w-0 flex-1 items-center justify-center rounded-full border border-line bg-paper text-sm font-semibold text-ink" onClick={onClose}>
+      <div className="mt-8 flex justify-end gap-2">
+        <button type="button" className="inline-flex h-11 items-center justify-center rounded-full border border-line bg-paper px-5 text-sm font-semibold text-ink" onClick={onClose}>
           انصراف
+        </button>
+        <button type="submit" disabled={pending} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-5 text-sm font-semibold text-on-ink disabled:opacity-50">
+          {pending ? "در حال ذخیره" : "ذخیره"}
         </button>
       </div>
     </form>

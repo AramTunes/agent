@@ -4,6 +4,7 @@ import { MenuScreen } from "@/components/menu-block";
 import { Shell } from "@/components/shell";
 import { Empty, Skeleton } from "@/components/ui";
 import { publicBusinessFn } from "@/lib/api";
+import { fitsTopic } from "@/lib/business-focus";
 import { BookingScreen } from "./book";
 
 export const Route = createFileRoute("/b/$slug/$page")({ component: CustomPage });
@@ -16,9 +17,10 @@ function CustomPage() {
     publicBusinessFn({ data: { slug } }).then((res) => {
       if (!live) return;
       const blocks = res.ok && Array.isArray(res.data?.pageBlocks) ? res.data.pageBlocks : [];
+      const categoryId = res.ok ? res.data?.categoryId as string | undefined : undefined;
       const path = decodeURIComponent(page);
-      const menu = blocks.some((item: { type?: string; url?: string; active?: boolean }) => (item.type === "menu" || item.type === "products" || item.type === "services") && item.active !== false && (item.url?.trim() || (item.type === "products" ? "products" : item.type === "services" ? "services" : "menu")) === path);
-      const book = path === "book" || blocks.some((item: { type?: string; url?: string; active?: boolean }) => item.type === "booking" && item.active !== false && (item.url?.trim() || "book") === path);
+      const menu = blocks.some((item: { type?: string; url?: string; active?: boolean }) => fitsTopic(item.type ?? "", categoryId) && (item.type === "menu" || item.type === "products" || item.type === "services") && item.active !== false && (item.url?.trim() || (item.type === "products" ? "products" : item.type === "services" ? "services" : "menu")) === path);
+      const book = fitsTopic("booking", categoryId) && (path === "book" || blocks.some((item: { type?: string; url?: string; active?: boolean }) => item.type === "booking" && item.active !== false && (item.url?.trim() || "book") === path));
       if (menu) setMode("menu");
       else if (book) setMode("book");
       else setMode("none");

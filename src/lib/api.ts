@@ -187,6 +187,8 @@ export const createPageFn = (args: { data: unknown }) => post<any>("/api/v1/page
 
 export const meFn = () => get<any>("/api/v1/me");
 export const updateProfileFn = (args: { data: unknown }) => post<any>("/api/v1/me", args.data);
+export const sessionsFn = () => get<any>("/api/v1/me/sessions");
+export const revokeSessionFn = (args: { data: unknown }) => post<any>("/api/v1/me/sessions/revoke", args.data);
 export const claimAdminFn = () => post<any>("/api/v1/admin/claim", {});
 export const createBusinessFn = (args: { data: unknown }) => post<any>("/api/v1/businesses", args.data);
 export const createDemoFn = () => post<any>("/api/v1/demo", {});

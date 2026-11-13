@@ -3,7 +3,7 @@ import { ImagePlus } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePanel } from "@/components/account";
-import { Badge, Button, Card, Empty, Field, Skeleton, TextInput } from "@/components/ui";
+import { Badge, Button, Card, DialogActions, Empty, Field, Skeleton, TextInput } from "@/components/ui";
 import { PhoneInput } from "@/components/phone-input";
 import { WEEKDAYS_FA, clockLabel, enDigits } from "@/lib/booking/fa";
 import { fitImage } from "@/lib/fit-image";
@@ -264,8 +264,7 @@ function StaffPage() {
               برنامه فعلی: {selected.weekly.map((item) => `${WEEKDAYS_FA[item.weekday]} ${clockLabel(item.startMin)}–${clockLabel(item.endMin)}`).join("، ") || "بدون ساعت"}
             </p>
           ) : null}
-          <div className="flex gap-2">
-            <Button type="submit" disabled={saving}>{saving ? "در حال ذخیره" : "ذخیره پرسنل"}</Button>
+          <DialogActions>
             {id ? (
               <Button
                 type="button"
@@ -288,7 +287,8 @@ function StaffPage() {
                 حذف
               </Button>
             ) : null}
-          </div>
+            <Button type="submit" disabled={saving}>{saving ? "در حال ذخیره" : "ذخیره پرسنل"}</Button>
+          </DialogActions>
           {invite ? (
             <p className="rounded-xl bg-paper px-3 py-2 text-sm leading-6">
               پیامک وصل نیست. این لینک برای پرسنل است تا نامش را تأیید کند و با کد وارد شود:

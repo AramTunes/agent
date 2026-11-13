@@ -111,7 +111,7 @@ function CustomersPage() {
     const list = (rows ?? []).filter((row) => {
       if (group !== "all" && groupOf(row) !== group) return false;
       if (!needle) return true;
-      const hay = `${row.name} ${row.phone} ${enDigits(row.phone)} ${row.address || ""} ${row.notes} ${row.customerNote || ""} ${row.birthDate || ""}`.toLowerCase();
+      const hay = `${row.name} ${row.firstName || ""} ${row.lastName || ""} ${row.phone} ${enDigits(row.phone)} ${row.address || ""} ${row.notes} ${row.customerNote || ""} ${birthHay(row.birthDate || "")}`.toLowerCase();
       return hay.includes(needle);
     });
     if (!sort) return list;
@@ -190,7 +190,7 @@ function CustomersPage() {
           <TextInput
             value={q}
             onChange={(event) => setQ(event.target.value)}
-            placeholder="نام، شماره، آدرس یا یادداشت"
+            placeholder="نام، شماره، آدرس، یادداشت یا تاریخ تولد"
             aria-label="جست‌وجو"
             className="max-w-xs"
           />
@@ -470,6 +470,15 @@ function RowMenu({ onView, onEdit, onDelete }: { onView: () => void; onEdit: () 
   );
 }
 
+function birthHay(day: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day || "";
+  const [year, month, date] = day.split("-").map(Number);
+  const jalali = gregorianToJalali(year, month, date);
+  const pad = `${jalali.jy}/${String(jalali.jm).padStart(2, "0")}/${String(jalali.jd).padStart(2, "0")}`;
+  const short = `${jalali.jy}/${jalali.jm}/${jalali.jd}`;
+  return `${day} ${pad} ${short} ${faNum(pad)} ${faNum(short)}`;
+}
+
 function birthLabel(day: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return day || "ثبت نشده";
   const [year, month, date] = day.split("-").map(Number);
@@ -519,7 +528,7 @@ function CustomerView({ customer, zone, businessId, onClose }: { customer: Custo
           ))}
         </dl>
         <Button type="button" variant="quiet" onClick={() => setMore((value) => !value)}>{more ? "بستن اطلاعات بیشتر" : "نمایش اطلاعات بیشتر"}</Button>
-        {more ? <CustomerFile businessId={businessId} customerId={customer.id} /> : null}
+        {more ? <CustomerFile businessId={businessId} customerId={customer.id} zone={zone} /> : null}
         <DialogActions>
           <Button type="button" onClick={onClose}>بستن</Button>
         </DialogActions>
@@ -587,7 +596,15 @@ function CustomerDialog({
   );
 }
 
-function CustomerFile({ businessId, customerId }: { businessId: string; customerId: string }) {
+const orderStatus: Record<string, string> = {
+  new: "جدید",
+  preparing: "در حال آماده‌سازی",
+  ready: "آماده",
+  delivered: "تحویل",
+  cancelled: "لغو",
+};
+
+function CustomerFile({ businessId, customerId, zone }: { businessId: string; customerId: string; zone: string }) {
   const [file, setFile] = useState<{ bookings: { id: string; service: string; staff: string; startsAt: string; status: string }[]; orders: { id: string; title: string; status: string; createdAt: string; price: number }[]; notes: { id: string; body: string; createdAt: string }[] } | null>(null);
   useEffect(() => {
     let live = true;
@@ -604,10 +621,13 @@ function CustomerFile({ businessId, customerId }: { businessId: string; customer
       <div>
         <h3 className="font-bold">نوبت‌ها</h3>
         {file.bookings.length === 0 ? <p className="mt-1 text-muted">نوبتی نیست.</p> : null}
-        <ul className="mt-1 grid gap-1">
+        <ul className="mt-1 grid gap-2">
           {file.bookings.map((item) => (
-            <li key={item.id} className="flex justify-between gap-2">
-              <span className="min-w-0 truncate">{item.service} · {item.staff}</span>
+            <li key={item.id} className="flex items-start justify-between gap-2">
+              <span className="min-w-0">
+                <span className="block truncate">{item.service} · {item.staff}</span>
+                <span className="text-muted">{formatWhen(item.startsAt, zone)}</span>
+              </span>
               <span className="shrink-0 text-muted">{STATUS_FA[item.status] ?? item.status}</span>
             </li>
           ))}
@@ -616,9 +636,12 @@ function CustomerFile({ businessId, customerId }: { businessId: string; customer
       <div>
         <h3 className="font-bold">سفارش‌ها</h3>
         {file.orders.length === 0 ? <p className="mt-1 text-muted">سفارشی با این شماره نیست.</p> : null}
-        <ul className="mt-1 grid gap-1">
+        <ul className="mt-1 grid gap-2">
           {file.orders.map((item) => (
-            <li key={item.id} className="truncate">{item.title}</li>
+            <li key={item.id} className="flex items-start justify-between gap-2">
+              <span className="min-w-0 truncate">{item.title}</span>
+              <span className="shrink-0 text-end text-muted">{formatWhen(item.createdAt, zone)} · {orderStatus[item.status] ?? item.status}</span>
+            </li>
           ))}
         </ul>
       </div>
@@ -627,7 +650,10 @@ function CustomerFile({ businessId, customerId }: { businessId: string; customer
         {file.notes.length === 0 ? <p className="mt-1 text-muted">اگر توضیح داخلی را عوض کنید، متن قبلی این‌جا می‌ماند.</p> : null}
         <ul className="mt-1 grid gap-2">
           {file.notes.map((item) => (
-            <li key={item.id} className="leading-6">{item.body}</li>
+            <li key={item.id} className="leading-6">
+              <span className="block text-muted">{formatWhen(item.createdAt, zone)}</span>
+              {item.body}
+            </li>
           ))}
         </ul>
       </div>

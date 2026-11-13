@@ -12,6 +12,7 @@ import { formatClock, formatDay } from "@/lib/booking/format";
 import { addDaysYmd, civilInZone, todayYmd } from "@/lib/booking/time";
 import { availabilityFn, createBookingFn, publicBusinessFn, setBookingStatusFn } from "@/lib/api";
 import { PageMark } from "@/lib/page-avatar";
+import { fitsTopic } from "@/lib/business-focus";
 
 export const Route = createFileRoute("/b/$slug/book")({ component: BookPage });
 
@@ -30,10 +31,12 @@ type Biz = {
   allowAnyStaff: boolean;
   isDemo: boolean;
   avatar?: string;
+  cancelBeforeMinutes?: number;
   minLeadMinutes: number;
   maxHorizonDays: number;
   address?: string;
   phone?: string;
+  categoryId?: string;
   pageBlocks?: { type?: string; title?: string; active?: boolean }[];
   services: Service[];
   staff: { id: string; name: string; title: string; serviceIds: string[]; weekly?: { weekday: number; startMin: number; endMin: number }[] }[];
@@ -54,6 +57,16 @@ function closedFor(
   });
 }
 
+function bookingRules(biz: Biz) {
+  const cancel = (biz.cancelBeforeMinutes ?? 0) > 0
+    ? `لغو یا جابه‌جایی تا ${minutesLabel(biz.cancelBeforeMinutes ?? 0)} مانده به نوبت ممکن است`
+    : "لغو یا جابه‌جایی تا شروع نوبت ممکن است";
+  const lead = biz.minLeadMinutes > 0
+    ? `رزرو حداقل ${minutesLabel(biz.minLeadMinutes)} زودتر انجام می‌شود`
+    : "رزرو تا نزدیک همان ساعت ممکن است";
+  return `${cancel}. ${lead}.`;
+}
+
 function localDay(iso: string, zone: string) {
   const c = civilInZone(new Date(iso), zone || "Asia/Tehran");
   return `${c.year}-${String(c.month).padStart(2, "0")}-${String(c.day).padStart(2, "0")}`;
@@ -70,7 +83,6 @@ type Receipt = {
   id: string;
   customerName?: string;
   customerPhone?: string;
-  customerEmail?: string;
   note?: string;
   startsAt?: string;
   serviceName?: string;
@@ -99,7 +111,6 @@ export function BookingScreen({ slug }: { slug: string }) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
   const [pending, setPending] = useState(false);
   const [step, setStep] = useState(0);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
@@ -129,7 +140,6 @@ export function BookingScreen({ slug }: { slug: string }) {
     const parts = (user.displayName ?? "").trim().split(/\s+/).filter(Boolean);
     if (parts.length) setFirstName(parts[0] ?? "");
     if (parts.length > 1) setLastName(parts.slice(1).join(" "));
-    if (user.primaryEmail) setEmail(user.primaryEmail);
   }, [user, firstName, lastName]);
 
   const services = biz?.services ?? [];
@@ -140,7 +150,7 @@ export function BookingScreen({ slug }: { slug: string }) {
   );
 
   useEffect(() => {
-    if (!biz || !serviceId || !day) return;
+    if (!biz || !serviceId || !day || !fitsTopic("booking", biz.categoryId)) return;
     let live = true;
     setSlotLoading(true);
     setStart("");
@@ -160,16 +170,11 @@ export function BookingScreen({ slug }: { slug: string }) {
     const given = firstName.trim();
     const family = lastName.trim();
     if (given.length < 2 || family.length < 2) {
-      toast.error("اسم و فامیل را کامل بنویسید");
+      toast.error("نام و نام خانوادگی را کامل بنویسید");
       return;
     }
     if (!isIranMobile(phone)) {
       toast.error("شماره موبایل معتبر نیست");
-      return;
-    }
-    const mail = email.trim();
-    if (mail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
-      toast.error("ایمیل معتبر نیست");
       return;
     }
     setPending(true);
@@ -183,7 +188,6 @@ export function BookingScreen({ slug }: { slug: string }) {
         firstName: given,
         lastName: family,
         customerPhone: `0${normalizeIranMobile(phone)}`,
-        customerEmail: mail,
         idempotencyKey: idempotency(),
       },
     });
@@ -224,6 +228,13 @@ export function BookingScreen({ slug }: { slug: string }) {
       </Shell>
     );
   }
+  if (!fitsTopic("booking", biz.categoryId)) {
+    return (
+      <Shell>
+        <Empty title="این صفحه نوبت ندارد" body="موضوع این کسب‌وکار رزرو نوبت نیست." />
+      </Shell>
+    );
+  }
   const min = todayYmd(biz.timezone || "Asia/Tehran");
   const max = addDaysYmd(min, biz.maxHorizonDays, biz.timezone || "Asia/Tehran");
   const heading = biz.pageBlocks?.find((item) => item.type === "booking" && item.active !== false)?.title?.trim() || "رزرو نوبت";
@@ -241,13 +252,13 @@ export function BookingScreen({ slug }: { slug: string }) {
         </div>
         <Link to="/b/$slug" params={{ slug }} className="text-sm font-semibold text-jade">بازگشت به صفحه</Link>
       </div>
+      <p className="mb-4 text-sm leading-6 text-muted">{bookingRules(biz)}</p>
       {receipt ? (
         <Card>
           <h2 className="text-xl font-bold">{receipt.status === "cancelled" ? "نوبت لغو شد" : "نوبت ثبت شد"}</h2>
           <dl className="mt-4 grid gap-2 text-sm leading-7">
             <div className="flex justify-between gap-3"><dt className="text-muted">اسمت</dt><dd>{receipt.customerName || "ثبت نشده"}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">شماره‌ت</dt><dd dir="ltr">{receipt.customerPhone || "ثبت نشده"}</dd></div>
-            <div className="flex justify-between gap-3"><dt className="text-muted">ایمیل</dt><dd dir="ltr">{receipt.customerEmail?.trim() || "ندارد"}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">یادداشت برای کسب‌وکار</dt><dd className="text-end">{receipt.note?.trim() || "ندارد"}</dd></div>
             {receipt.customerNote ? <div className="flex justify-between gap-3"><dt className="text-muted">پیام کسب‌وکار</dt><dd className="text-end">{receipt.customerNote}</dd></div> : null}
             <div className="flex justify-between gap-3"><dt className="text-muted">روز</dt><dd>{receipt.startsAt ? formatDay(localDay(receipt.startsAt, biz.timezone)) : ""}</dd></div>
@@ -257,10 +268,6 @@ export function BookingScreen({ slug }: { slug: string }) {
             <div className="flex justify-between gap-3"><dt className="text-muted">آدرس ما</dt><dd className="text-end">{biz.address?.trim() || "ثبت نشده"}</dd></div>
             <div className="flex justify-between gap-3"><dt className="text-muted">شماره ما</dt><dd dir="ltr">{biz.phone?.trim() || "ثبت نشده"}</dd></div>
           </dl>
-          {receipt.status !== "cancelled" ? (
-            <p className="mt-4 text-sm leading-7 text-muted">نوبتتون ثبت شد. جزئیاتش رو می‌تونید از لینک زیر ببینید. همین پیام برای شماره شما هم ارسال شد.</p>
-          ) : null}
-          {receipt.status !== "cancelled" && receipt.receiptToken ? <a href={`${window.location.origin}/r/${receipt.receiptToken}`} className="mt-2 block break-all text-sm font-semibold text-jade">{`${window.location.origin}/r/${receipt.receiptToken}`}</a> : null}
           {receipt.status !== "cancelled" ? (
             <div className="mt-5 border-t border-line pt-4">
               <p className="text-sm leading-7">اگر می‌خواهی نوبتت را لغو کنی، از فرم زیر استفاده کن.</p>
@@ -342,21 +349,16 @@ export function BookingScreen({ slug }: { slug: string }) {
               <h2 className="font-bold">مشخصات</h2>
               {service && start ? <p className="mt-2 text-sm text-muted">{service.name}، {day ? formatDay(day) : ""}، {formatClock(start, biz.timezone)}</p> : null}
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <Field label="اسم">
+                <Field label="نام">
                   <TextInput value={firstName} maxLength={40} onChange={(event) => setFirstName(event.target.value)} />
                 </Field>
-                <Field label="فامیل">
+                <Field label="نام خانوادگی">
                   <TextInput value={lastName} maxLength={40} onChange={(event) => setLastName(event.target.value)} />
                 </Field>
               </div>
               <div className="mt-3">
                 <Field label="شماره">
                   <PhoneInput value={phone} onChange={setPhone} />
-                </Field>
-              </div>
-              <div className="mt-3">
-                <Field label="ایمیل" hint="اختیاری">
-                  <TextInput dir="ltr" className="text-left" inputMode="email" value={email} maxLength={120} onChange={(event) => setEmail(event.target.value)} />
                 </Field>
               </div>
               <div className="mt-3">

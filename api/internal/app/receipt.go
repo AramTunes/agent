@@ -56,6 +56,9 @@ func (s *Service) sendBookingReceipt(out map[string]any, origin string) {
 	token, _ := out["receiptToken"].(string)
 	phone, _ := out["customerPhone"].(string)
 	id, _ := out["id"].(string)
+	if !smsReady() {
+		return
+	}
 	s.queueSMS(phone, customerReceiptText("booking", receiptLink(origin, token)), id)
 }
 
@@ -131,7 +134,7 @@ func (s *Service) bookingReceipt(token string) (any, bool, error) {
 	err := s.db.QueryRow(`
 		SELECT s.name, st.name, biz.name, biz.address, biz.phone, biz.timezone,
 		       COALESCE(NULLIF(c.name, ''), b.customer_name, ''), COALESCE(NULLIF(c.phone, ''), b.customer_phone, ''),
-		       b.note, COALESCE(c.customer_note, ''), b.status, b.starts_at, b.cancel_reason, s.price_toman, s.duration_minutes
+		       b.note, COALESCE(c.customer_note, ''), b.status, b.starts_at, b.cancel_reason, COALESCE(b.price_toman, s.price_toman), s.duration_minutes
 		FROM bookings b
 		JOIN services s ON s.id = b.service_id
 		JOIN staff st ON st.id = b.staff_id

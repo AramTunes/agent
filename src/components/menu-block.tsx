@@ -7,6 +7,7 @@ import { AnimatedTabs } from "@/components/animated-tabs";
 import { Shell } from "@/components/shell";
 import { Switch } from "@/components/switch";
 import { Area, Empty, Field, Skeleton, TextInput } from "@/components/ui";
+import { PhoneInput } from "@/components/phone-input";
 import { Combobox } from "@/components/ui/combobox";
 import { Select } from "@/components/ui/select";
 import type { ContactItem } from "@/components/link-page";
@@ -15,8 +16,11 @@ import { JalaliCalendar } from "@/components/jalali-calendar";
 import { enDigits, faNum } from "@/lib/booking/fa";
 import { fitImage } from "@/lib/fit-image";
 import { deliverySlots, type ShopSpan } from "@/lib/shop-hours";
+import { isIranMobile } from "@/lib/iran-phone";
 import { pageIcon } from "@/lib/page-icons";
+import { fitsTopic } from "@/lib/business-focus";
 import { todayYmd as todayInZone } from "@/lib/booking/time";
+import { formatSlot } from "@/lib/booking/format";
 
 const statuses = [
   { id: "available", label: "موجود" },
@@ -801,7 +805,8 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
       setHours(Array.isArray(res.data?.shopHours) ? res.data.shopHours : []);
       const blocks = Array.isArray(res.data?.pageBlocks) ? (res.data.pageBlocks as MenuBlock[]) : [];
       const path = decodeURIComponent(page);
-      setBlock(blocks.find((item) => (item.type === "menu" || item.type === "products" || item.type === "services") && item.active !== false && (item.url?.trim() || catalogFallback(item.type)) === path) ?? null);
+      const found = blocks.find((item) => (item.type === "menu" || item.type === "products" || item.type === "services") && item.active !== false && (item.url?.trim() || catalogFallback(item.type)) === path) ?? null;
+      setBlock(found && fitsTopic(found.type || "menu", res.data?.categoryId) ? found : null);
       setReady(true);
     });
     return () => { live = false; };
@@ -847,7 +852,8 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
       {loose.length ? <MenuItems items={loose} layout={layout} currency={currency} cart={cart} onOpen={(item) => setPicking(item)} onChange={changeLine} /> : null}
       {groups.map((group) => (
         <section key={group.category.id} className="mt-6">
-          <h2 className="mb-2 font-bold">{group.category.title}</h2>
+          <h2 className="font-bold">{group.category.title}</h2>
+          {group.category.value?.trim() ? <p className="mb-2 text-sm leading-6 text-muted">{group.category.value}</p> : <span className="mb-2 block" />}
           <MenuItems items={group.items} layout={layout} currency={currency} cart={cart} onOpen={(item) => setPicking(item)} onChange={changeLine} />
         </section>
       ))}
@@ -856,7 +862,7 @@ export function MenuScreen({ slug, page }: { slug: string; page: string }) {
       {count > 0 ? (
         <button type="button" onClick={() => setOrdering(true)} className="sticky bottom-4 mt-6 flex w-full items-center justify-between rounded-full bg-ink px-5 py-3 text-sm font-semibold text-on-ink">
           <span className="inline-flex items-center gap-2"><ShoppingBag className="size-4" />سبد خرید · {faNum(count)}</span>
-          <span>{total.priced ? formatMenuMoney(total.amount, currency) : "جمع قطعی نیست"}</span>
+          <span>{total.shown ? formatMenuMoney(total.amount, currency) : null}</span>
         </button>
       ) : null}
       {picking ? <PickSheet item={picking} currency={currency} cart={cart} onClose={() => setPicking(null)} onChange={changeLine} /> : null}
@@ -998,12 +1004,14 @@ function linePrice(item: ContactItem, variantId: string): number | null {
 
 function cartSum(cart: CartLine[]) {
   let amount = 0;
+  let shown = false;
   for (const line of cart) {
     const price = linePrice(line.item, line.variantId);
-    if (price == null) return { amount: 0, priced: false };
+    if (price == null) continue;
+    shown = true;
     amount += price * line.qty;
   }
-  return { amount, priced: true };
+  return { amount, shown };
 }
 
 function lineLabel(line: CartLine) {
@@ -1046,14 +1054,12 @@ function CartSheet({ slug, cart, currency, hours, zone, onClose, onChange, onDon
   const [step, setStep] = useState<"cart" | "form" | "done">("cart");
   const [customer, setCustomer] = useState("");
   const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
   const [address, setAddress] = useState("");
   const [when, setWhen] = useState<"now" | "later">("now");
   const [day, setDay] = useState(todayInZone(zone));
   const slots = deliverySlots(day, hours, zone);
   const [time, setTime] = useState("");
   const [note, setNote] = useState("");
-  const [doneUrl, setDoneUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const total = cartSum(cart);
   function setQty(key: string, qty: number) {
@@ -1069,6 +1075,10 @@ function CartSheet({ slug, cart, currency, hours, zone, onClose, onChange, onDon
       toast.error("نام و نام خانوادگی را وارد کنید");
       return;
     }
+    if (!isIranMobile(phone)) {
+      toast.error("شماره موبایل معتبر نیست");
+      return;
+    }
     if (when === "later" && !slots.includes(time)) {
       toast.error("یک ساعت داخل ساعت کاری انتخاب کنید");
       return;
@@ -1079,7 +1089,6 @@ function CartSheet({ slug, cart, currency, hours, zone, onClose, onChange, onDon
         slug,
         name: customer,
         phone,
-        email,
         address,
         when,
         date: day,
@@ -1093,15 +1102,26 @@ function CartSheet({ slug, cart, currency, hours, zone, onClose, onChange, onDon
       toast.error(res.error);
       return;
     }
-    const token = String(res.data?.receiptToken ?? "");
-    setDoneUrl(token ? `${window.location.origin}/r/${token}` : "");
     setStep("done");
   }
   const body = step === "done" ? (
-    <div className="grid gap-3 text-center">
-      <p className="text-lg font-extrabold">سفارش ثبت شد</p>
-      <p className="text-sm leading-7 text-muted">سفارشتون ثبت شد. جزئیاتش رو می‌تونید از لینک زیر ببینید. همین پیام برای شماره شما هم ارسال شد.</p>
-      {doneUrl ? <a href={doneUrl} className="break-all text-sm font-semibold text-jade">{doneUrl}</a> : null}
+    <div className="grid gap-3">
+      <p className="text-center text-lg font-extrabold">سفارش ثبت شد</p>
+      <ul className="grid gap-1 text-sm">
+        {cart.map((line) => {
+          const price = linePrice(line.item, line.variantId);
+          const label = `${lineLabel(line)}${line.qty > 1 ? ` × ${faNum(line.qty)}` : ""}`;
+          return <li key={line.key}>{price == null ? `${label} · ${priceText(line.item, currency)}` : `${label} · ${formatMenuMoney(price * line.qty, currency)}`}</li>;
+        })}
+      </ul>
+      <dl className="grid gap-2 text-sm leading-7">
+        <div className="flex justify-between gap-3"><dt className="text-muted">نام</dt><dd>{customer}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-muted">موبایل</dt><dd dir="ltr">{faNum(phone)}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-muted">آدرس</dt><dd className="text-end">{address.trim() || "ثبت نشده"}</dd></div>
+        <div className="flex justify-between gap-3"><dt className="text-muted">زمان تحویل</dt><dd>{when === "later" ? formatSlot(`${day} ${time}`) : "هرچه زودتر"}</dd></div>
+        {total.shown ? <div className="flex justify-between gap-3"><dt className="text-muted">جمع</dt><dd>{formatMenuMoney(total.amount, currency)}</dd></div> : null}
+        {note.trim() ? <div className="flex justify-between gap-3"><dt className="text-muted">یادداشت</dt><dd className="text-end">{note.trim()}</dd></div> : null}
+      </dl>
       <button type="button" onClick={onDone} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-4 text-sm font-semibold text-on-ink">باشه</button>
     </div>
   ) : step === "cart" ? (
@@ -1121,20 +1141,17 @@ function CartSheet({ slug, cart, currency, hours, zone, onClose, onChange, onDon
           <button type="button" aria-label="حذف" onClick={() => setQty(line.key, 0)} className="grid size-8 place-items-center text-muted"><Trash2 className="size-4" /></button>
         </div>
       ))}
-      <p className="text-sm font-semibold">{total.priced ? `جمع: ${formatMenuMoney(total.amount, currency)}` : "جمع قطعی نیست"}</p>
+      {total.shown ? <p className="text-sm font-semibold">جمع: {formatMenuMoney(total.amount, currency)}</p> : null}
       <button type="button" disabled={cart.length === 0} onClick={() => setStep("form")} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-4 text-sm font-semibold text-on-ink disabled:opacity-50">ادامه و ثبت سفارش</button>
     </div>
   ) : (
     <div className="grid gap-3">
-      <p className="text-sm text-muted">{faNum(cart.reduce((sum, line) => sum + line.qty, 0))} کالا{total.priced ? ` · ${formatMenuMoney(total.amount, currency)}` : " · جمع قطعی نیست"}</p>
+      <p className="text-sm text-muted">{faNum(cart.reduce((sum, line) => sum + line.qty, 0))} کالا{total.shown ? ` · ${formatMenuMoney(total.amount, currency)}` : ""}</p>
       <Field label="نام و نام خانوادگی">
         <TextInput value={customer} maxLength={80} onChange={(event) => setCustomer(event.target.value)} />
       </Field>
       <Field label="شماره موبایل">
-        <TextInput dir="ltr" className="text-left" inputMode="tel" value={phone} maxLength={14} placeholder="09123456789" onChange={(event) => setPhone(event.target.value)} />
-      </Field>
-      <Field label="ایمیل" hint="اختیاری">
-        <TextInput dir="ltr" className="text-left" inputMode="email" value={email} maxLength={80} onChange={(event) => setEmail(event.target.value)} />
+        <PhoneInput value={phone} onChange={setPhone} />
       </Field>
       <Field label="آدرس">
         <Area value={address} maxLength={200} className="min-h-16" placeholder="خیابان، کوچه، پلاک" onChange={(event) => setAddress(event.target.value.slice(0, 200))} />

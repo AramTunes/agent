@@ -58,7 +58,7 @@ type bookInput struct {
 	businessID, serviceID, start, key, note, origin string
 	staffID                                         string
 	manual                                          *struct{ name, phone string }
-	contact                                         *struct{ name, phone, email string }
+	contact                                         *struct{ name, phone string }
 }
 
 func parseBooking(raw map[string]any) (bookInput, error) {
@@ -103,7 +103,6 @@ func parseBooking(raw map[string]any) (bookInput, error) {
 	}
 	first, _ := textOf(raw, "firstName", 40, "")
 	last, _ := textOf(raw, "lastName", 40, "")
-	email, _ := textOf(raw, "customerEmail", 120, "")
 	if !isTrue(raw, "manual") && (first != "" || last != "") {
 		full := first
 		if last != "" {
@@ -113,7 +112,7 @@ func parseBooking(raw map[string]any) (bookInput, error) {
 			full += last
 		}
 		phone, _ := textOf(raw, "customerPhone", 20, "")
-		in.contact = &struct{ name, phone, email string }{full, phone, email}
+		in.contact = &struct{ name, phone string }{full, phone}
 	}
 	return in, nil
 }
@@ -159,9 +158,9 @@ func (s *Service) place(tx *sql.Tx, userID string, in bookInput) (map[string]any
 		}
 	}
 	var branch sql.NullString
-	var dur, buf, active int
+	var dur, buf, price, active int
 	var svcName string
-	err = tx.QueryRow(`SELECT branch_id, duration_minutes, buffer_minutes, active, name FROM services WHERE id = ? AND business_id = ?`, in.serviceID, b.ID).Scan(&branch, &dur, &buf, &active, &svcName)
+	err = tx.QueryRow(`SELECT branch_id, duration_minutes, buffer_minutes, price_toman, active, name FROM services WHERE id = ? AND business_id = ?`, in.serviceID, b.ID).Scan(&branch, &dur, &buf, &price, &active, &svcName)
 	if err != nil || active == 0 {
 		return nil, fail(404, "NOT_FOUND", "خدمت پیدا نشد")
 	}
@@ -235,7 +234,7 @@ func (s *Service) place(tx *sql.Tx, userID string, in bookInput) (map[string]any
 		return nil, err
 	}
 	if in.contact != nil && in.contact.name != "" {
-		if _, err = tx.Exec(`UPDATE customers SET name=?, phone=?, email=? WHERE id=?`, in.contact.name, in.contact.phone, in.contact.email, customerID); err != nil {
+		if _, err = tx.Exec(`UPDATE customers SET name=?, phone=? WHERE id=?`, in.contact.name, in.contact.phone, customerID); err != nil {
 			return nil, err
 		}
 	}
@@ -261,15 +260,15 @@ func (s *Service) place(tx *sql.Tx, userID string, in bookInput) (map[string]any
 	_ = tx.QueryRow(`SELECT name, phone FROM customers WHERE id = ?`, customerID).Scan(&custName, &custPhone)
 	_, err = tx.Exec(`INSERT INTO bookings (
 		id, business_id, branch_id, service_id, staff_id, customer_id, customer_user_id, created_by_user_id,
-		starts_at, ends_at, buffer_until, status, source, idempotency_key, note, created_at, updated_at, customer_name, customer_phone, receipt_token
-	) VALUES (?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,?,?)`,
+		starts_at, ends_at, buffer_until, status, source, idempotency_key, note, created_at, updated_at, customer_name, customer_phone, receipt_token, price_toman
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?,'confirmed',?,?,?,?,?,?,?,?,?)`,
 		bookingID, b.ID, branchID, in.serviceID, chosen, customerID, custUser, userID,
-		booking.ISO(start), booking.ISO(ends), booking.ISO(bufferUntil), source, in.key, in.note, now, now, custName, custPhone, token)
+		booking.ISO(start), booking.ISO(ends), booking.ISO(bufferUntil), source, in.key, in.note, now, now, custName, custPhone, token, price)
 	if err != nil {
 		return nil, err
 	}
 	when := start.In(loc).Format("2006-01-02 15:04")
-	ids := append([]string{}, s.memberIDs(tx, b.ID)...)
+	ids := s.bookingWatchers(tx, b.ID, chosen)
 	if in.manual == nil {
 		ids = append(ids, userID)
 	}
@@ -304,6 +303,15 @@ func (s *Service) SetStatus(userID string, raw map[string]any) (any, error) {
 		if role == "" && !isCustomer {
 			return fail(403, "FORBIDDEN", "به این نوبت دسترسی ندارید")
 		}
+		if role == "staff" {
+			own, err := s.ownStaffID(tx, userID, row.BusinessID)
+			if err != nil {
+				return err
+			}
+			if own == "" || own != row.StaffID {
+				return fail(403, "FORBIDDEN", "فقط نوبت خودت را می‌توانی تعیین وضعیت کنی")
+			}
+		}
 		if role == "" && status != "cancelled" {
 			return fail(403, "FORBIDDEN", "فقط کسب‌وکار می‌تواند این وضعیت را عوض کند")
 		}
@@ -333,7 +341,7 @@ func (s *Service) SetStatus(userID string, raw map[string]any) (any, error) {
 		if title == "" {
 			title = "وضعیت نوبت عوض شد"
 		}
-		ids := append(s.memberIDs(tx, row.BusinessID), row.CustomerUser.String)
+		ids := append(s.bookingWatchers(tx, row.BusinessID, row.StaffID), row.CustomerUser.String)
 		s.notify(tx, ids, row.BusinessID, bookingID, "booking_"+status, title, row.ServiceName+". این پیام فقط اعلان داخلی است.")
 		_ = s.audit(tx, userID, "booking_status", "booking", strPtr(bookingID), strPtr(row.BusinessID), status)
 		next, err := s.loadBooking(tx, bookingID)
@@ -387,6 +395,15 @@ func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
 		isCustomer := row.CustomerUser.Valid && row.CustomerUser.String == userID
 		if role == "" && !isCustomer {
 			return fail(403, "FORBIDDEN", "به این نوبت دسترسی ندارید")
+		}
+		if role == "staff" {
+			own, err := s.ownStaffID(tx, userID, b.ID)
+			if err != nil {
+				return err
+			}
+			if own == "" || own != row.StaffID {
+				return fail(403, "FORBIDDEN", "فقط نوبت خودت را می‌توانی جابه‌جا کنی")
+			}
 		}
 		if row.Status != "confirmed" && row.Status != "pending" {
 			return fail(409, "POLICY", "این نوبت قابل جابه‌جایی نیست")
@@ -470,7 +487,10 @@ func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
 		if n == 0 {
 			return fail(409, "SLOT_TAKEN", "زمان جدید همین حالا گرفته شد")
 		}
-		ids := append(s.memberIDs(tx, b.ID), row.CustomerUser.String)
+		ids := append(s.bookingWatchers(tx, b.ID, chosen), row.CustomerUser.String)
+		if row.StaffID != "" && row.StaffID != chosen {
+			ids = append(ids, s.bookingWatchers(tx, b.ID, row.StaffID)...)
+		}
 		s.notify(tx, ids, b.ID, bookingID, "booking_rescheduled", "نوبت جابه‌جا شد", row.ServiceName+". این پیام فقط اعلان داخلی است.")
 		_ = s.audit(tx, userID, "reschedule", "booking", strPtr(bookingID), strPtr(b.ID), "")
 		next, err := s.loadBooking(tx, bookingID)
@@ -489,7 +509,17 @@ func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
 func (s *Service) Notifications(userID string) (any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	rows, err := s.db.Query(`SELECT id, title, body, kind, COALESCE(booking_id, ''), channel, read_at, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 80`, userID)
+	rows, err := s.db.Query(`
+		SELECT id, title, body, kind, COALESCE(booking_id, ''), channel, read_at, created_at FROM (
+			SELECT id, title, body, kind, booking_id, channel, read_at, created_at
+			FROM notifications WHERE user_id = ? AND read_at IS NULL
+			UNION ALL
+			SELECT id, title, body, kind, booking_id, channel, read_at, created_at FROM (
+				SELECT id, title, body, kind, booking_id, channel, read_at, created_at
+				FROM notifications WHERE user_id = ? AND read_at IS NOT NULL
+				ORDER BY created_at DESC LIMIT 40
+			)
+		) ORDER BY created_at DESC`, userID, userID)
 	if err != nil {
 		return nil, err
 	}
