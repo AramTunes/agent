@@ -1,14 +1,7 @@
 package app
 
 import (
-	"bytes"
-	"encoding/json"
-	"net/http"
-	"os"
-	"strings"
 	"time"
-
-	"agent/internal/booking"
 )
 
 func (s *Service) RunReminders() {
@@ -20,16 +13,36 @@ func (s *Service) RunReminders() {
 	}
 }
 
-func (s *Service) RemindDue() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.remindDueLocked()
+type dueReminder struct {
+	id, businessID, phone, service, business, zone string
+	start                                          time.Time
 }
 
-func (s *Service) remindDueLocked() {
+func (s *Service) RemindDue() {
+	s.mu.Lock()
+	ready := s.dueReminders()
+	s.mu.Unlock()
+	stamp := s.now().UTC().Format(time.RFC3339)
+	for _, item := range ready {
+		date, clock := smsWhen(item.start.UTC().Format(time.RFC3339), item.zone)
+		if !s.sendCustomerSMS(item.businessID, item.phone, "remind", map[string]string{
+			"token10": cleanToken(item.service, 5, 12),
+			"token20": cleanToken(item.business, 8, 18),
+			"token2":  date,
+			"token3":  clock,
+		}) {
+			continue
+		}
+		s.mu.Lock()
+		_, _ = s.db.Exec(`UPDATE bookings SET reminded_at = ? WHERE id = ? AND reminded_at = ''`, stamp, item.id)
+		s.mu.Unlock()
+	}
+}
+
+func (s *Service) dueReminders() []dueReminder {
 	now := s.now()
 	rows, err := s.db.Query(`
-		SELECT b.id, b.starts_at, COALESCE(c.phone, ''), s.name, st.name, biz.name, biz.timezone, biz.remind_hours
+		SELECT b.id, b.business_id, b.starts_at, COALESCE(c.phone, ''), s.name, biz.name, biz.timezone, biz.remind_hours
 		FROM bookings b
 		JOIN services s ON s.id = b.service_id
 		JOIN staff st ON st.id = b.staff_id
@@ -39,18 +52,15 @@ func (s *Service) remindDueLocked() {
 		ORDER BY b.starts_at
 		LIMIT 100`)
 	if err != nil {
-		return
+		return nil
 	}
-	type due struct {
-		id, phone, service, staff, business, text string
-	}
-	var ready []due
+	defer rows.Close()
+	var ready []dueReminder
 	for rows.Next() {
-		var id, starts, phone, service, staff, business, zone string
+		var id, businessID, starts, phone, service, business, zone string
 		var hours int
-		if err := rows.Scan(&id, &starts, &phone, &service, &staff, &business, &zone, &hours); err != nil {
-			rows.Close()
-			return
+		if err := rows.Scan(&id, &businessID, &starts, &phone, &service, &business, &zone, &hours); err != nil {
+			return nil
 		}
 		if hours <= 0 {
 			continue
@@ -62,64 +72,10 @@ func (s *Service) remindDueLocked() {
 		if !start.After(now) || start.After(now.Add(time.Duration(hours)*time.Hour)) {
 			continue
 		}
-		ready = append(ready, due{id: id, phone: phone, service: service, staff: staff, business: business, text: reminderText(start, zone, business, service, staff)})
+		ready = append(ready, dueReminder{id: id, businessID: businessID, phone: phone, service: service, business: business, zone: zone, start: start})
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return
+		return nil
 	}
-	rows.Close()
-	stamp := now.UTC().Format(time.RFC3339)
-	for _, item := range ready {
-		status, last := "skipped", "no_phone"
-		if strings.TrimSpace(item.phone) != "" {
-			status, last = deliverSMS(item.phone, item.text)
-		}
-		payload, _ := json.Marshal(map[string]string{"to": item.phone, "text": item.text, "bookingId": item.id})
-		_, _ = s.db.Exec(`INSERT INTO notification_jobs (id, channel, payload, status, last_error, created_at) VALUES (?,?,?,?,?,?)`,
-			newID(), "sms", string(payload), status, last, stamp)
-		_, _ = s.db.Exec(`UPDATE bookings SET reminded_at = ? WHERE id = ? AND reminded_at = ''`, stamp, item.id)
-	}
-}
-
-func reminderText(start time.Time, zone, business, service, staff string) string {
-	loc := mustZone(zone)
-	civil := booking.CivilInZone(start, loc)
-	return "یادآوری نوبت " + business + ": " + service + " با " + staff + "، ساعت " + two(civil.Hour) + ":" + two(civil.Minute)
-}
-
-func two(n int) string {
-	if n < 10 {
-		return "0" + itoa(n)
-	}
-	return itoa(n)
-}
-
-func smsReady() bool {
-	return strings.TrimSpace(os.Getenv("SMS_URL")) != ""
-}
-
-func deliverSMS(phone, text string) (string, string) {
-	endpoint := strings.TrimSpace(os.Getenv("SMS_URL"))
-	if endpoint == "" {
-		return "pending", "no_provider"
-	}
-	body, _ := json.Marshal(map[string]string{"to": phone, "text": text})
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "pending", "send_failed"
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if token := strings.TrimSpace(os.Getenv("SMS_TOKEN")); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	res, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
-	if err != nil {
-		return "pending", "send_failed"
-	}
-	defer res.Body.Close()
-	if res.StatusCode >= 300 {
-		return "pending", "send_failed"
-	}
-	return "sent", ""
+	return ready
 }

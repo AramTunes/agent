@@ -328,6 +328,57 @@ CREATE TABLE IF NOT EXISTS shop_hours (
   end_min INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS shop_hours_biz_idx ON shop_hours (business_id, weekday);
+CREATE TABLE IF NOT EXISTS dining_tables (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  number TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  UNIQUE (business_id, number)
+);
+CREATE TABLE IF NOT EXISTS table_reservations (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  table_id TEXT NOT NULL,
+  table_number TEXT NOT NULL,
+  customer_name TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  starts_at TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'held',
+  cancel_reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS table_hold_uq ON table_reservations (table_id) WHERE status = 'held';
+CREATE INDEX IF NOT EXISTS table_reservations_biz_idx ON table_reservations (business_id, created_at);
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  gateway TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  term_months INTEGER NOT NULL DEFAULT 0,
+  sms_count INTEGER NOT NULL DEFAULT 0,
+  amount_toman INTEGER NOT NULL,
+  authority TEXT NOT NULL DEFAULT '',
+  ref_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  return_origin TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  paid_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS payments_authority_idx ON payments (gateway, authority);
+CREATE TABLE IF NOT EXISTS sms_wallets (
+  business_id TEXT PRIMARY KEY,
+  balance INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS sms_prefs (
+  business_id TEXT PRIMARY KEY,
+  remind INTEGER NOT NULL DEFAULT 1,
+  receipt INTEGER NOT NULL DEFAULT 1,
+  survey INTEGER NOT NULL DEFAULT 0
+);
 `
 
 func Open(path string) (*sql.DB, error) {
@@ -338,7 +389,7 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(8)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
@@ -362,6 +413,7 @@ func Open(path string) (*sql.DB, error) {
 		`ALTER TABLE menu_orders ADD COLUMN priced INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE menu_orders ADD COLUMN customer_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE menu_orders ADD COLUMN receipt_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE menu_orders ADD COLUMN cancel_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bookings ADD COLUMN receipt_token TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE services ADD COLUMN photo TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bookings ADD COLUMN reminded_at TEXT NOT NULL DEFAULT ''`,
@@ -372,6 +424,10 @@ func Open(path string) (*sql.DB, error) {
 		`ALTER TABLE sessions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN last_seen TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE sessions ADD COLUMN device TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE subscriptions ADD COLUMN trial_ends_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE subscriptions ADD COLUMN plan_ends_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE subscriptions ADD COLUMN appearance_ends_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			db.Close()
@@ -397,6 +453,10 @@ func Open(path string) (*sql.DB, error) {
 		}
 	}
 	if err := seed(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := uniqueTicketCodes(db); err != nil {
 		db.Close()
 		return nil, err
 	}

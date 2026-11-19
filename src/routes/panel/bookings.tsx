@@ -60,8 +60,11 @@ function AllBookingsPage() {
   const days = [...groups.keys()].sort((a, b) => b.localeCompare(a));
 
   return (
-    <div className="grid min-w-0 gap-4">
-      <h1 className="text-2xl font-extrabold">همه نوبت‌ها</h1>
+    <div className="panel-page grid min-w-0 gap-6">
+      <div>
+        <h1 className="text-xl font-bold">همه نوبت‌ها</h1>
+        <p className="text-sm text-muted">نوبت‌های همه تاریخ‌ها. برای تغییر وضعیت روی ردیف بزنید.</p>
+      </div>
       {rows === null ? <Skeleton className="h-24" /> : null}
       {rows && rows.length === 0 ? <Empty title="نوبتی نیست" body="نوبت‌های همه تاریخ‌ها این‌جا دیده می‌شود." /> : null}
       {days.map((day) => (
@@ -72,7 +75,7 @@ function AllBookingsPage() {
               key={row.id}
               type="button"
               onClick={() => setPicked(row)}
-              className="min-w-0 rounded-card border border-line bg-card p-5 text-start shadow-sm"
+              className="min-w-0 rounded-card border border-line bg-card p-5 text-start"
             >
               <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">

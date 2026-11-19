@@ -101,6 +101,9 @@ func (s *Service) requireRole(q querier, userID, businessID string, roles ...str
 	if err != nil {
 		return "", err
 	}
+	if role == "manager" {
+		role = "staff"
+	}
 	for _, want := range roles {
 		if role == want {
 			return role, nil
@@ -547,17 +550,35 @@ func (s *Service) snapshot(q querier, b bizRow, manage bool) (map[string]any, er
 		}
 		grows.Close()
 	}
-	return map[string]any{
+	blocks := pageBlocksValue(b.PageBlocks)
+	if !manage {
+		_, appearance := s.entitlements(q, b.ID, false)
+		if !appearance {
+			blocks = stripCustomTheme(blocks)
+		}
+	}
+	out := map[string]any{
 		"id": b.ID, "name": b.Name, "slug": b.Slug, "description": b.Description,
 		"categoryId": catID, "categoryName": catName, "city": b.City, "address": b.Address, "phone": b.Phone,
 		"timezone": b.Timezone, "status": b.Status, "statusReason": reason,
 		"cancelBeforeMinutes": b.CancelBefore, "minLeadMinutes": b.MinLead, "maxHorizonDays": b.Horizon,
 		"slotStepMinutes": b.Step, "allowAnyStaff": b.AllowAny, "isDemo": b.IsDemo, "avatar": b.Avatar, "remindHours": b.RemindHours,
-		"pageBlocks": pageBlocksValue(b.PageBlocks),
+		"pageBlocks": blocks,
 		"branches":   branches, "services": services, "staff": staff, "holidays": holidays,
 		"customerGroups": groups,
 		"shopHours":      s.shopHours(q, b.ID),
-	}, nil
+	}
+	if manage {
+		view := s.billingView(q, b.ID)
+		out["billing"] = view
+		if ends, _ := view["planEndsAt"].(string); ends != "" {
+			out["subscription"] = map[string]any{"endsAt": ends, "status": "active"}
+		}
+		if live, _ := view["live"].(bool); live {
+			out["smsCredit"] = view["smsBalance"]
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) Me(userID string) (any, error) {

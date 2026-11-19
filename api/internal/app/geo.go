@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,19 @@ var (
 	geoCache = map[string]geoHit{}
 	geoHTTP  = &http.Client{Timeout: 1200 * time.Millisecond}
 )
+
+func ClientIP(remoteAddr, forwarded string) string {
+	if strings.TrimSpace(os.Getenv("AGENT_TRUST_PROXY")) == "1" {
+		if hop := strings.TrimSpace(strings.Split(forwarded, ",")[0]); hop != "" {
+			return hop
+		}
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		return strings.TrimSpace(remoteAddr)
+	}
+	return host
+}
 
 func LookupPlace(ip string) (string, string) {
 	ip = strings.TrimSpace(ip)
@@ -62,4 +76,47 @@ func LookupPlace(ip string) (string, string) {
 	geoCache[ip] = geoHit{country: country, city: city}
 	geoMu.Unlock()
 	return country, city
+}
+
+func CountryFromZone(zone string) string {
+	zone = strings.TrimSpace(zone)
+	if zone == "" || len(zone) > 64 {
+		return ""
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		return ""
+	}
+	if country, ok := zoneCountries[zone]; ok {
+		return country
+	}
+	return ""
+}
+
+var zoneCountries = map[string]string{
+	"Asia/Tehran": "ایران", "Iran": "ایران",
+	"Asia/Kabul":    "افغانستان",
+	"Asia/Dubai":    "امارات",
+	"Asia/Baghdad":  "عراق",
+	"Asia/Riyadh":   "عربستان",
+	"Asia/Kuwait":   "کویت",
+	"Asia/Qatar":    "قطر",
+	"Asia/Bahrain":  "بحرین",
+	"Asia/Muscat":   "عمان",
+	"Asia/Karachi":  "پاکستان",
+	"Asia/Baku":     "آذربایجان",
+	"Asia/Yerevan":  "ارمنستان",
+	"Asia/Tbilisi":  "گرجستان",
+	"Asia/Istanbul": "ترکیه", "Europe/Istanbul": "ترکیه",
+	"Europe/London":    "بریتانیا",
+	"Europe/Paris":     "فرانسه",
+	"Europe/Berlin":    "آلمان",
+	"Europe/Rome":      "ایتالیا",
+	"Europe/Madrid":    "اسپانیا",
+	"Europe/Amsterdam": "هلند",
+	"Europe/Stockholm": "سوئد",
+	"Europe/Moscow":    "روسیه",
+	"America/New_York": "آمریکا", "America/Chicago": "آمریکا", "America/Denver": "آمریکا", "America/Los_Angeles": "آمریکا",
+	"America/Toronto": "کانادا", "America/Vancouver": "کانادا",
+	"America/Sao_Paulo": "برزیل",
+	"Australia/Sydney":  "استرالیا",
 }

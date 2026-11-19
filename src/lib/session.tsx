@@ -44,6 +44,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let live = true;
     const token = readToken();
+    writeToken(token);
     const cached = token ? readCachedUser() : null;
     if (!token) {
       writeCachedUser(null);

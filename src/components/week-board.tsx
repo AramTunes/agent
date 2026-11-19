@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { AppWindow } from "@/components/panel-window";
 import { ScrollArea } from "@/components/scroll-area";
-import { Button, Card, DialogActions, Field, Skeleton, TextInput } from "@/components/ui";
+import { Button, Card, Skeleton } from "@/components/ui";
+import { CancelReasonPick, bookingCancelReasons } from "@/components/cancel-reasons";
 import { availabilityFn, businessBookingsFn, rescheduleBookingFn, setBookingStatusFn } from "@/lib/api";
 import { clockLabel, faNum, STATUS_FA, WEEKDAYS_FA } from "@/lib/booking/fa";
 import { formatDay, formatWhen } from "@/lib/booking/format";
@@ -19,10 +20,11 @@ type Booking = {
   staffName?: string;
   startsAt: string;
   endsAt?: string;
+  bufferUntil?: string;
   durationMinutes?: number;
   status: string;
 };
-type Placed = Booking & { start: number; end: number; col: number; cols: number };
+type Placed = Booking & { start: number; end: number; buffer: number; col: number; cols: number };
 
 const HOUR = 48;
 
@@ -200,16 +202,18 @@ function DayGrid({
         {events.map((event) => {
           const top = ((event.start - startHour * 60) / 60) * HOUR;
           const block = Math.max(22, ((event.end - event.start) / 60) * HOUR - 2);
+          const buffer = event.buffer > event.end ? Math.max(8, ((event.buffer - event.end) / 60) * HOUR - 2) : 0;
           return (
             <div
               key={event.id}
               className="absolute px-0.5"
-              style={{ top, height: block, insetInlineStart: `${(event.col / event.cols) * 100}%`, width: `${100 / event.cols}%` }}
+              style={{ top, height: block + buffer, insetInlineStart: `${(event.col / event.cols) * 100}%`, width: `${100 / event.cols}%` }}
             >
               <button
                 type="button"
                 onClick={() => onPick(event)}
-                className={`flex h-full w-full flex-col overflow-hidden rounded-md border-s-2 px-1.5 py-0.5 text-start text-xs ${event.status === "no_show" ? "border-danger bg-danger-soft" : event.status === "completed" ? "border-line bg-paper" : "border-jade bg-jade-soft"}`}
+                className={`flex w-full flex-col overflow-hidden rounded-md border-s-2 px-1.5 py-0.5 text-start text-xs ${event.status === "no_show" ? "border-danger bg-danger-soft" : event.status === "completed" ? "border-line bg-paper" : "border-jade bg-jade-soft"}`}
+                style={{ height: block }}
               >
                 <span className="truncate font-semibold">{event.customerName}</span>
                 {block > 36 ? (
@@ -218,6 +222,7 @@ function DayGrid({
                   </span>
                 ) : null}
               </button>
+              {buffer ? <div className="mt-0.5 rounded-md border border-dashed border-line" style={{ height: buffer - 2, background: "repeating-linear-gradient(135deg, transparent, transparent 4px, var(--paper-deep) 4px, var(--paper-deep) 6px)" }} title="آماده‌سازی" /> : null}
             </div>
           );
         })}
@@ -247,7 +252,6 @@ export function VisitDialog({
 }) {
   const open = booking.status === "confirmed" || booking.status === "pending";
   const [mode, setMode] = useState<"main" | "cancel" | "move">("main");
-  const [reason, setReason] = useState("");
   const [pending, setPending] = useState(false);
   const [moveDay, setMoveDay] = useState(() => {
     const civil = civilInZone(new Date(booking.startsAt), zone);
@@ -314,21 +318,10 @@ export function VisitDialog({
         </div>
       ) : null}
       {mode === "cancel" ? (
-        <form
-          className="mt-4 grid gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void setStatus("cancelled", reason.trim() || "لغو توسط کسب‌وکار");
-          }}
-        >
-          <Field label="دلیل لغو">
-            <TextInput value={reason} onChange={(event) => setReason(event.target.value)} placeholder="اختیاری" />
-          </Field>
-          <DialogActions>
-            <Button type="button" variant="quiet" onClick={() => setMode("main")}>انصراف</Button>
-            <Button type="submit" variant="danger" disabled={pending}>{pending ? "در حال لغو" : "لغو نوبت"}</Button>
-          </DialogActions>
-        </form>
+        <div className="mt-4 grid gap-2">
+          <p className="text-sm font-semibold">یک دلیل را بزنید تا نوبت لغو شود</p>
+          <CancelReasonPick reasons={bookingCancelReasons} pending={pending} onPick={(item) => void setStatus("cancelled", item)} />
+        </div>
       ) : null}
       {mode === "move" ? (
         <div className="mt-4 grid gap-3">
@@ -401,11 +394,9 @@ function rangeFor(weekly: Span[], weekday: number, rows: Booking[], zone: string
   let startHour = spans.length ? Math.floor(Math.min(...spans.map((item) => item.startMin)) / 60) : null;
   let endHour = spans.length ? Math.ceil(Math.max(...spans.map((item) => item.endMin)) / 60) : null;
   for (const row of rows) {
-    const start = minutesOf(row.startsAt, zone);
-    let end = row.endsAt ? minutesOf(row.endsAt, zone) : start + (row.durationMinutes || 30);
-    if (end <= start) end = start + (row.durationMinutes || 30);
-    startHour = startHour == null ? Math.floor(start / 60) : Math.min(startHour, Math.floor(start / 60));
-    endHour = endHour == null ? Math.ceil(end / 60) : Math.max(endHour, Math.ceil(end / 60));
+    const span = spanOf(row, zone);
+    startHour = startHour == null ? Math.floor(span.start / 60) : Math.min(startHour, Math.floor(span.start / 60));
+    endHour = endHour == null ? Math.ceil(span.buffer / 60) : Math.max(endHour, Math.ceil(span.buffer / 60));
   }
   if (startHour == null || endHour == null || endHour <= startHour) return null;
   return { startHour, endHour };
@@ -414,19 +405,17 @@ function rangeFor(weekly: Span[], weekday: number, rows: Booking[], zone: string
 function place(rows: Booking[], zone: string): Placed[] {
   const sorted: Placed[] = rows
     .map((row) => {
-      const start = minutesOf(row.startsAt, zone);
-      let end = row.endsAt ? minutesOf(row.endsAt, zone) : start + (row.durationMinutes || 30);
-      if (end <= start) end = start + (row.durationMinutes || 30);
-      return { ...row, start, end, col: 0, cols: 1 };
+      const span = spanOf(row, zone);
+      return { ...row, ...span, col: 0, cols: 1 };
     })
-    .sort((a, b) => a.start - b.start || a.end - b.end);
+    .sort((a, b) => a.start - b.start || a.buffer - b.buffer);
   let cluster: Placed[] = [];
   let clusterEnd = -1;
   function flush() {
     const columns: Placed[][] = [];
     for (const event of cluster) {
       let col = 0;
-      while (columns[col]?.some((other) => other.start < event.end && event.start < other.end)) col += 1;
+      while (columns[col]?.some((other) => other.start < event.buffer && event.start < other.buffer)) col += 1;
       (columns[col] ??= []).push(event);
       event.col = col;
     }
@@ -437,8 +426,20 @@ function place(rows: Booking[], zone: string): Placed[] {
   for (const event of sorted) {
     if (cluster.length && event.start >= clusterEnd) flush();
     cluster.push(event);
-    clusterEnd = Math.max(clusterEnd, event.end);
+    clusterEnd = Math.max(clusterEnd, event.buffer);
   }
   if (cluster.length) flush();
   return sorted;
+}
+
+function spanOf(row: Booking, zone: string) {
+  const start = minutesOf(row.startsAt, zone);
+  let end = row.endsAt ? minutesOf(row.endsAt, zone) : start + (row.durationMinutes || 30);
+  if (!Number.isFinite(end) || end <= start) end = start + (row.durationMinutes || 30);
+  let buffer = end;
+  if (row.bufferUntil) {
+    const until = minutesOf(row.bufferUntil, zone);
+    if (Number.isFinite(until) && until > end) buffer = until;
+  }
+  return { start, end, buffer };
 }

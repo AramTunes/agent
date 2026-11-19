@@ -13,8 +13,8 @@ var nextStatus = map[string][]string{
 }
 
 func (s *Service) CreateBooking(userID string, raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lock()
+	defer unlock()
 	if !s.rate("book:"+userID, 10, time.Minute) {
 		return nil, fail(429, "RATE_LIMIT", "تعداد درخواست زیاد است. کمی بعد دوباره تلاش کنید.")
 	}
@@ -29,9 +29,12 @@ func (s *Service) CreateBooking(userID string, raw map[string]any) (any, error) 
 		return err
 	})
 	if err == nil {
-		s.remindDueLocked()
-		s.sendBookingReceipt(out, input.origin)
-		return out, nil
+		fresh := out
+		origin := input.origin
+		unlock()
+		s.RemindDue()
+		s.sendBookingReceipt(fresh, origin)
+		return fresh, nil
 	}
 	if !isUnique(err) {
 		return nil, err
@@ -142,6 +145,9 @@ func (s *Service) place(tx *sql.Tx, userID string, in bookInput) (map[string]any
 		return bookDTO(row, true), nil
 	}
 	if err != sql.ErrNoRows {
+		return nil, err
+	}
+	if err := s.commerceOpen(tx, b.ID); err != nil {
 		return nil, err
 	}
 	if in.manual != nil {
@@ -370,8 +376,8 @@ func (s *Service) assertWindow(q querier, row bookRow) error {
 }
 
 func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lock()
+	defer unlock()
 	bookingID, _ := textOf(raw, "bookingId", 80, "")
 	staffID, _ := textOf(raw, "staffId", 80, "")
 	start, err := parseISO(raw["start"])
@@ -501,7 +507,8 @@ func (s *Service) Reschedule(userID string, raw map[string]any) (any, error) {
 		return nil
 	})
 	if err == nil {
-		s.remindDueLocked()
+		unlock()
+		s.RemindDue()
 	}
 	return out, err
 }

@@ -58,7 +58,12 @@ function ServicesPage() {
   const limited = role === "staff";
 
   return (
-    <div className={limited ? "grid gap-3" : "grid gap-4 lg:grid-cols-[340px_1fr]"}>
+    <div className="panel-page grid gap-6">
+      <div>
+        <h1 className="text-xl font-bold">خدمات</h1>
+        <p className="text-sm text-muted">مدت، قیمت و زمان آماده‌سازی هر خدمت</p>
+      </div>
+      <div className={limited ? "grid gap-3" : "grid gap-4 lg:grid-cols-[340px_1fr]"}>
       {limited ? null : (
       <Card>
         <h2 className="text-lg font-bold">{form.id ? "ویرایش خدمت" : "خدمت تازه"}</h2>
@@ -145,6 +150,7 @@ function ServicesPage() {
             {item.description ? <p className="mt-2 text-sm leading-6">{item.description}</p> : null}
           </button>
         ))}
+      </div>
       </div>
     </div>
   );

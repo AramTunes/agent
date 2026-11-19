@@ -2,11 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge, Button, Card, Field, Skeleton, TextInput } from "@/components/ui";
-import { adminCategoriesFn, saveCategoryFn } from "@/lib/api";
+import { adminCategoriesFn, deleteCategoryFn, moveCategoryFn, saveCategoryFn } from "@/lib/api";
+import { faNum } from "@/lib/booking/fa";
 
 export const Route = createFileRoute("/admin/categories")({ component: CategoriesPage });
 
-type Cat = { id: string; name: string; slug: string; active: boolean; sort: number };
+type Cat = { id: string; name: string; slug: string; active: boolean; sort: number; pages: number };
 
 function CategoriesPage() {
   const [rows, setRows] = useState<Cat[]>([]);
@@ -24,6 +25,25 @@ function CategoriesPage() {
   useEffect(() => {
     load();
   }, []);
+
+  async function move(id: string, dir: "up" | "down") {
+    const res = await moveCategoryFn({ data: { id, dir } });
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    setRows(res.data);
+  }
+  async function remove(row: Cat) {
+    const res = await deleteCategoryFn({ data: { id: row.id } });
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("حذف شد");
+    setRows(res.data);
+    if (form.id === row.id) setForm({ id: "", name: "", slug: "", active: true });
+  }
 
   return (
     <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
@@ -60,13 +80,21 @@ function CategoriesPage() {
       <div className="grid content-start gap-2">
         {loading ? <Skeleton className="h-24" /> : null}
         {rows.map((row) => (
-          <button key={row.id} type="button" className="rounded-card border border-line bg-card p-4 text-start hover:border-jade" onClick={() => setForm({ id: row.id, name: row.name, slug: row.slug, active: row.active })}>
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-bold">{row.name}</span>
-              <Badge tone={row.active ? "jade" : "muted"}>{row.active ? "فعال" : "مخفی"}</Badge>
+          <div key={row.id} className="rounded-card border border-line bg-card p-4">
+            <button type="button" className="w-full text-start" onClick={() => setForm({ id: row.id, name: row.name, slug: row.slug, active: row.active })}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold">{row.name}</span>
+                <Badge tone={row.active ? "jade" : "muted"}>{row.active ? "فعال" : "مخفی"}</Badge>
+              </div>
+              <p className="text-sm text-muted" dir="ltr">{row.slug}</p>
+              <p className="text-sm text-muted">{faNum(row.pages)} صفحه</p>
+            </button>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button type="button" variant="quiet" onClick={() => void move(row.id, "up")}>بالا</Button>
+              <Button type="button" variant="quiet" onClick={() => void move(row.id, "down")}>پایین</Button>
+              <Button type="button" variant="quiet" disabled={row.pages > 0} onClick={() => void remove(row)}>حذف</Button>
             </div>
-            <p className="text-sm text-muted" dir="ltr">{row.slug}</p>
-          </button>
+          </div>
         ))}
       </div>
     </div>

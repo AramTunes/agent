@@ -233,3 +233,21 @@ html[data-theme="dark"] {
   color: transparent;
   animation: attachment-shimmer 1.4s linear infinite;
 }
+
+.panel-page .shadow-sm {
+  box-shadow: none;
+}
+
+@media print {
+  .print-hide,
+  aside,
+  header,
+  nav {
+    display: none !important;
+  }
+  .min-h-dvh {
+    min-height: 0 !important;
+    padding-inline-start: 0 !important;
+    background: #fff !important;
+  }
+}

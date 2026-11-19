@@ -53,7 +53,9 @@ function AdminLayout() {
           { to: "/admin", label: "نمای کلی", exact: true },
           { to: "/admin/users", label: "کاربران" },
           { to: "/admin/businesses", label: "کسب‌وکارها" },
+          { to: "/admin/payments", label: "پرداخت‌ها" },
           { to: "/admin/categories", label: "دسته‌ها" },
+          { to: "/admin/support", label: "پشتیبانی" },
           { to: "/admin/audit", label: "حسابرسی" },
         ]}
       />

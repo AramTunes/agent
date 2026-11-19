@@ -67,6 +67,15 @@ func (s *Service) accountByPhone(phone string) (*accountRow, error) {
 	return &row, nil
 }
 
+func (s *Service) userDisabled(userID string) bool {
+	var n int
+	err := s.db.QueryRow(`SELECT disabled FROM users WHERE id = ?`, userID).Scan(&n)
+	if err != nil {
+		return err != sql.ErrNoRows
+	}
+	return n != 0
+}
+
 func (s *Service) openSession(userID, device string) (string, error) {
 	token := newToken()
 	now := s.now().UTC()
@@ -111,6 +120,10 @@ func (s *Service) UserID(token string) (string, error) {
 	until, err := time.Parse(time.RFC3339, exp)
 	if err != nil || s.now().After(until) {
 		return "", fail(401, "UNAUTHORIZED", "برای ادامه وارد شوید")
+	}
+	if s.userDisabled(userID) {
+		_, _ = s.db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, hash)
+		return "", fail(401, "UNAUTHORIZED", "ورود این حساب بسته است")
 	}
 	s.touchSession(hash)
 	return userID, nil
@@ -182,8 +195,8 @@ func mustString(m map[string]any, key string) string {
 }
 
 func (s *Service) SendCode(raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lock()
+	defer unlock()
 	phone, err := normalizePhone(mustString(raw, "phone"))
 	if err != nil {
 		return nil, err
@@ -218,6 +231,10 @@ func (s *Service) SendCode(raw map[string]any) (any, error) {
 	if _, err := s.db.Exec(`INSERT INTO phone_codes (id, phone, purpose, code_hash, expires_at) VALUES (?,?,?,?,?)`,
 		newID(), phone, purpose, hashCode(phone, purpose, code), exp); err != nil {
 		return nil, err
+	}
+	unlock()
+	if s.sendPlatformCode(phone, code) {
+		return map[string]any{"sent": true, "sms": true}, nil
 	}
 	return map[string]any{"sent": true, "code": code}, nil
 }
@@ -306,6 +323,9 @@ func (s *Service) SignInPassword(raw map[string]any) (any, error) {
 	if !checkPassword(acc.PasswordHash, password) {
 		return nil, fail(400, "AUTH", "رمز عبور نادرست است")
 	}
+	if s.userDisabled(acc.UserID) {
+		return nil, fail(403, "FORBIDDEN", "ورود این حساب بسته است")
+	}
 	token, err := s.openSession(acc.UserID, deviceFrom(raw))
 	if err != nil {
 		return nil, err
@@ -330,6 +350,9 @@ func (s *Service) SignInCode(raw map[string]any) (any, error) {
 	}
 	if acc == nil {
 		return nil, fail(404, "NOT_FOUND", "این شماره ثبت نشده است")
+	}
+	if s.userDisabled(acc.UserID) {
+		return nil, fail(403, "FORBIDDEN", "ورود این حساب بسته است")
 	}
 	if err := s.consumeCode(phone, "login", code); err != nil {
 		return nil, err
@@ -366,6 +389,9 @@ func (s *Service) ResetPassword(raw map[string]any) (any, error) {
 	}
 	if acc == nil {
 		return nil, fail(404, "NOT_FOUND", "این شماره ثبت نشده است")
+	}
+	if s.userDisabled(acc.UserID) {
+		return nil, fail(403, "FORBIDDEN", "ورود این حساب بسته است")
 	}
 	if err := s.consumeCode(phone, "reset", code); err != nil {
 		return nil, err
@@ -492,4 +518,3 @@ func (s *Service) RevokeSession(token string, raw map[string]any) (any, error) {
 	}
 	return map[string]any{"ok": true, "current": tokenHash == hashToken(token)}, nil
 }
-

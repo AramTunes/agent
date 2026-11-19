@@ -14,6 +14,7 @@ import {
   MonitorSmartphone,
   MousePointerClick,
   Percent,
+  Printer,
   Timer,
   TrendingUp,
   UserRound,
@@ -225,9 +226,13 @@ function ReportsPage() {
   const visits = range?.visits;
 
   return (
-        <div className="grid gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-extrabold">گزارشات</h1>
+        <div className="panel-page grid gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">گزارشات</h1>
+          <p className="text-sm text-muted">{preset === "custom" ? `${formatJalaliYmd(from)} تا ${formatJalaliYmd(to)}` : current?.label}</p>
+        </div>
+        <div className="print-hide flex flex-wrap items-center gap-2">
         <div className="relative">
           <button type="button" className="inline-flex h-11 items-center gap-2 rounded-full border border-line bg-card px-4 text-sm font-semibold" onClick={() => setOpen(open === "menu" ? "" : "menu")}>
             <Calendar className="size-4 shrink-0" aria-hidden="true" />
@@ -244,9 +249,14 @@ function ReportsPage() {
             </div>
           ) : null}
         </div>
+        <button type="button" className="inline-flex h-11 items-center gap-2 rounded-full border border-line bg-card px-4 text-sm font-semibold" onClick={() => window.print()}>
+          <Printer className="size-4 shrink-0" aria-hidden="true" />
+          چاپ
+        </button>
+        </div>
       </div>
       {preset === "custom" ? (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="print-hide grid gap-3 sm:grid-cols-2">
           {(["from", "to"] as const).map((key) => (
             <div key={key} className="grid gap-2">
               <button type="button" className="inline-flex h-11 items-center justify-between rounded-xl border border-line bg-card px-3 text-sm" onClick={() => setOpen(open === key ? "" : key)}>
@@ -426,12 +436,12 @@ function ReportsPage() {
                   </Card>
                   <Card>
                     <div className="flex items-center gap-2 text-sm font-semibold"><Flag className="size-4 text-[#ffa640]" />کشور بازدیدکننده‌ها</div>
-                    <p className="mt-1 text-xs text-muted">از روی اینترنت بازدیدکننده، نه منطقهٔ زمانی گوشی.</p>
+                    <p className="mt-1 text-xs text-muted">اگر اینترنت مکان ندهد، کشور از منطقهٔ زمانی مرورگر است. شهر فقط وقتی خود اینترنت آن را بدهد نوشته می‌شود.</p>
                     <Columns items={visits.countries} />
                   </Card>
                   <Card>
                     <div className="flex items-center gap-2 text-sm font-semibold"><Building2 className="size-4 text-[#ffa640]" />شهر بازدیدکننده‌ها</div>
-                    <p className="mt-1 text-xs text-muted">همان منبع کشور. بعضی اینترنت‌ها شهر را دقیق نمی‌دهند.</p>
+                    <p className="mt-1 text-xs text-muted">شهر را منطقهٔ زمانی نمی‌دهد. فقط وقتی اینترنت بازدیدکننده شهر را بگوید اینجا می‌آید.</p>
                     <Columns items={visits.cities} />
                   </Card>
                   <Card>

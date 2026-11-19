@@ -59,14 +59,25 @@ export function followups(data: {
   return items;
 }
 
+export type HeldTable = {
+  id: string;
+  number: string;
+  customer: string;
+  phone: string;
+  startsAt: string;
+  note?: string;
+};
+
 export function usePanelFollowups(businessId: string, personal: boolean, staff: boolean) {
   const [follow, setFollow] = useState<Followup[]>([]);
   const [overdue, setOverdue] = useState<OverdueBooking[]>([]);
+  const [tables, setTables] = useState<HeldTable[]>([]);
   const [zone, setZone] = useState("Asia/Tehran");
   useEffect(() => {
     if (!businessId) {
       setFollow([]);
       setOverdue([]);
+      setTables([]);
       return;
     }
     let live = true;
@@ -78,10 +89,11 @@ export function usePanelFollowups(businessId: string, personal: boolean, staff: 
     dashboardFn({ data: { businessId } }).then((res) => {
       if (!live || !res.ok) return;
       setOverdue(Array.isArray(res.data.overdue) ? res.data.overdue : []);
+      setTables(Array.isArray(res.data.heldTables) ? res.data.heldTables : []);
     });
     return () => {
       live = false;
     };
   }, [businessId, personal, staff]);
-  return { follow, overdue, zone };
+  return { follow, overdue, tables, zone };
 }

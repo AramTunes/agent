@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { CustomerLinkStage, type CustomerBlock } from "@/components/link-page";
 import { publicBusinessFn, trackStayFn } from "@/lib/api";
-import { fitsTopic } from "@/lib/business-focus";
+import { fitsTopic, focusKind } from "@/lib/business-focus";
 import { parseDesign } from "@/lib/page-design";
 
 export const Route = createFileRoute("/b/$slug/")({ component: BusinessPage });
@@ -60,5 +60,5 @@ function BusinessPage() {
   }
   const blocks = (Array.isArray(biz.pageBlocks) ? biz.pageBlocks : []).filter((item) => fitsTopic(item.type, biz.categoryId));
   const design = parseDesign(blocks.find((item) => item.type === "design")?.body);
-  return <CustomerLinkStage name={biz.name} bio={biz.description ?? ""} avatar={biz.avatar} slug={slug} blocks={blocks} design={design} />;
+  return <CustomerLinkStage name={biz.name} bio={biz.description ?? ""} avatar={biz.avatar} slug={slug} blocks={blocks} design={design} reserve={focusKind(biz.categoryId) === "hospitality"} />;
 }

@@ -13,6 +13,7 @@ import { addDaysYmd, civilInZone, todayYmd } from "@/lib/booking/time";
 import { availabilityFn, createBookingFn, publicBusinessFn, setBookingStatusFn } from "@/lib/api";
 import { PageMark } from "@/lib/page-avatar";
 import { fitsTopic } from "@/lib/business-focus";
+import { CancelReasonPick, customerCancelReasons } from "@/components/cancel-reasons";
 
 export const Route = createFileRoute("/b/$slug/book")({ component: BookPage });
 
@@ -77,8 +78,6 @@ function idempotency() {
   return key;
 }
 
-const cancelReasons = ["برنامه‌ام عوض شد", "وقت دیگری می‌خواهم", "دیگر نیاز ندارم", "اشتباه رزرو کردم"];
-
 type Receipt = {
   id: string;
   customerName?: string;
@@ -115,7 +114,6 @@ export function BookingScreen({ slug }: { slug: string }) {
   const [step, setStep] = useState(0);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [askCancel, setAskCancel] = useState(false);
-  const [reason, setReason] = useState(cancelReasons[0]);
   const [canceling, setCanceling] = useState(false);
 
   useEffect(() => {
@@ -200,7 +198,7 @@ export function BookingScreen({ slug }: { slug: string }) {
     toast.success("نوبت ثبت شد");
   }
 
-  async function cancelBooking() {
+  async function cancelBooking(reason: string) {
     if (!receipt) return;
     setCanceling(true);
     const res = await setBookingStatusFn({ data: { bookingId: receipt.id, status: "cancelled", reason } });
@@ -275,11 +273,8 @@ export function BookingScreen({ slug }: { slug: string }) {
                 <button type="button" onClick={() => setAskCancel(true)} className="mt-3 inline-flex h-11 items-center rounded-full border border-line px-4 text-sm font-semibold">لغو نوبت</button>
               ) : (
                 <div className="mt-3 grid gap-2">
-                  <p className="text-sm font-semibold">چرا می‌خواهی لغو کنی؟</p>
-                  {cancelReasons.map((item) => (
-                    <button key={item} type="button" onClick={() => setReason(item)} className={`min-h-11 rounded-xl border px-3 text-start text-sm ${reason === item ? "border-ink bg-paper" : "border-line"}`}>{item}</button>
-                  ))}
-                  <button type="button" disabled={canceling} onClick={() => void cancelBooking()} className="inline-flex h-11 items-center justify-center rounded-full bg-ink px-4 text-sm font-semibold text-on-ink">{canceling ? "در حال لغو" : "لغو نوبت"}</button>
+                  <p className="text-sm font-semibold">یک دلیل را بزنید تا نوبت لغو شود</p>
+                  <CancelReasonPick reasons={customerCancelReasons} pending={canceling} onPick={(item) => void cancelBooking(item)} />
                 </div>
               )}
             </div>

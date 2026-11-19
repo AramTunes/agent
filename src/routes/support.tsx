@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useAccount } from "@/components/account";
 import { Shell } from "@/components/shell";
 import { Badge, Button, DialogActions, Empty, Field, Skeleton, TextInput, Area } from "@/components/ui";
-import { closeSupportTicketFn, createSupportTicketFn, replySupportTicketFn, supportTicketsFn } from "@/lib/api";
+import { closeSupportTicketFn, createSupportTicketFn, reopenSupportTicketFn, replySupportTicketFn, supportTicketsFn } from "@/lib/api";
 import { faNum } from "@/lib/booking/fa";
 import { formatClock, formatWhen } from "@/lib/booking/format";
 import { RedirectToSignIn } from "@/lib/auth/gates";
@@ -71,7 +71,7 @@ function SupportPage() {
     });
   }, [tickets, q]);
   const ticket = filtered.find((item) => item.id === active) ?? filtered[0] ?? null;
-  const openCount = (tickets ?? []).filter((item) => item.status !== "done").length;
+  const openCount = (tickets ?? []).filter((item) => item.status === "open").length;
   const closedCount = (tickets ?? []).filter((item) => item.status === "done").length;
   const waitingCount = (tickets ?? []).filter((item) => item.status === "waiting").length;
 
@@ -150,7 +150,26 @@ function SupportPage() {
                         آخرین به‌روزرسانی {formatWhen(ticket.updatedAt, "Asia/Tehran")}
                       </p>
                     </div>
-                    {ticket.status !== "done" ? (
+                    {ticket.status === "done" ? (
+                      <Button
+                        type="button"
+                        variant="quiet"
+                        disabled={pending}
+                        onClick={async () => {
+                          setPending(true);
+                          const res = await reopenSupportTicketFn({ data: { id: ticket.id } });
+                          setPending(false);
+                          if (!res.ok) {
+                            toast.error(res.error);
+                            return;
+                          }
+                          toast.success("پرونده دوباره باز شد");
+                          await load();
+                        }}
+                      >
+                        باز کردن دوباره
+                      </Button>
+                    ) : (
                       <Button
                         type="button"
                         variant="quiet"
@@ -169,7 +188,7 @@ function SupportPage() {
                       >
                         بستن پرونده
                       </Button>
-                    ) : null}
+                    )}
                   </div>
                   <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
                     {ticket.messages.map((message) => {
@@ -189,6 +208,8 @@ function SupportPage() {
                       );
                     })}
                     {ticket.status === "waiting" ? <p className="text-xs text-muted">منتظر جواب پشتیبانی هستید.</p> : null}
+                    {ticket.status === "open" ? <p className="text-xs text-muted">پشتیبانی جواب داده. اگر حرفی مانده همین‌جا بنویسید.</p> : null}
+                    {ticket.status === "done" ? <p className="text-xs text-muted">این پرونده بسته است. برای ادامه، دوباره بازش کنید.</p> : null}
                   </div>
                   <form
                     className="shrink-0 border-t border-line p-4"
@@ -210,7 +231,7 @@ function SupportPage() {
                     <Area
                       value={draft}
                       onChange={(event) => setDraft(event.target.value.slice(0, 1000))}
-                      placeholder="پاسخ‌تان را بنویسید…"
+                      placeholder={ticket.status === "done" ? "برای نوشتن، پرونده را باز کنید" : "پاسخ‌تان را بنویسید…"}
                       rows={3}
                       disabled={ticket.status === "done" || pending}
                     />
@@ -296,15 +317,15 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function TicketTimeline({ ticket }: { ticket: Ticket }) {
   const first = ticket.messages[0];
-  const last = ticket.messages[ticket.messages.length - 1];
-  const replied = ticket.messages.length > 1;
+  const agent = [...ticket.messages].reverse().find((message) => message.author === "agent");
+  const answered = Boolean(agent);
   const items = [
     { date: formatWhen(ticket.createdAt, "Asia/Tehran"), title: "ثبت تیکت", description: "درخواست شما ثبت شد", done: true },
     {
-      date: replied && last ? formatWhen(last.at, "Asia/Tehran") : "هنوز پیام تازه‌ای نیست",
+      date: answered && agent ? formatWhen(agent.at, "Asia/Tehran") : "هنوز پشتیبانی جواب نداده",
       title: "گفت‌وگو",
-      description: first ? "پیام شما برای پشتیبانی" : "",
-      done: replied || ticket.status === "done",
+      description: answered ? "پشتیبانی جواب داده" : first ? "منتظر جواب پشتیبانی" : "",
+      done: answered,
     },
     {
       date: ticket.status === "done" ? formatWhen(ticket.updatedAt, "Asia/Tehran") : "هنوز بسته نشده",
@@ -313,7 +334,7 @@ function TicketTimeline({ ticket }: { ticket: Ticket }) {
       done: ticket.status === "done",
     },
   ];
-  const active = ticket.status === "done" ? 2 : replied ? 1 : 0;
+  const active = ticket.status === "done" ? 2 : answered ? 1 : 0;
   return (
     <ol>
       {items.map((item, index) => (

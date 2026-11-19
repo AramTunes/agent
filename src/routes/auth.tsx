@@ -26,6 +26,7 @@ function AuthPage() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [shownCode, setShownCode] = useState("");
+  const [smsSent, setSmsSent] = useState(false);
   const [nextPassword, setNextPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -61,7 +62,8 @@ function AuthPage() {
         setError(codeRes.error);
         return;
       }
-      setShownCode(codeRes.data.code);
+      setShownCode(codeRes.data.code ?? "");
+      setSmsSent(Boolean(codeRes.data.sms));
       setCode("");
       setStep("code");
       return;
@@ -87,6 +89,7 @@ function AuthPage() {
     setError("");
     setCode("");
     setShownCode("");
+    setSmsSent(false);
     setNextPassword("");
     setConfirm("");
     setPending(true);
@@ -96,7 +99,8 @@ function AuthPage() {
       setError(res.error);
       return;
     }
-    setShownCode(res.data.code);
+    setShownCode(res.data.code ?? "");
+    setSmsSent(Boolean(res.data.sms));
     setStep(purpose === "reset" ? "reset" : "code");
   }
 
@@ -163,7 +167,7 @@ function AuthPage() {
 
           {step === "code" ? (
             <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void withCode(event); }}>
-              <CodeNotice code={shownCode} />
+              <CodeNotice code={shownCode} sms={smsSent} />
               <Field label="کد تأیید">
                 <OtpField value={code} onChange={setCode} />
               </Field>
@@ -178,7 +182,7 @@ function AuthPage() {
 
           {step === "reset" ? (
             <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void changePassword(event); }}>
-              <CodeNotice code={shownCode} />
+              <CodeNotice code={shownCode} sms={smsSent} />
               <Field label="کد تأیید">
                 <OtpField value={code} onChange={setCode} />
               </Field>
@@ -208,7 +212,10 @@ function AuthPage() {
   );
 }
 
-function CodeNotice({ code }: { code: string }) {
+function CodeNotice({ code, sms }: { code: string; sms?: boolean }) {
+  if (!code && sms) {
+    return <p className="rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">کد تأیید پیامک شد. اگر نیامد چند دقیقه بعد دوباره بخواهید.</p>;
+  }
   if (!code) return null;
   return (
     <p className="rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">

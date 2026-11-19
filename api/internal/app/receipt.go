@@ -17,49 +17,24 @@ func safeOrigin(value string) string {
 	return ""
 }
 
-func receiptLink(origin, token string) string {
-	if origin == "" || token == "" {
-		return ""
-	}
-	return origin + "/r/" + token
-}
-
-func customerReceiptText(kind, link string) string {
-	word := "درخواستتون"
-	if kind == "order" {
-		word = "سفارشتون"
-	}
-	if kind == "booking" {
-		word = "نوبتتون"
-	}
-	text := word + " ثبت شد. جزئیاتش رو می‌تونید از لینک زیر ببینید."
-	if link != "" {
-		text += "\n" + link
-	}
-	return text
-}
-
-func (s *Service) queueSMS(phone, text string, ref string) {
-	status, last := "skipped", "no_phone"
-	if strings.TrimSpace(phone) != "" {
-		status, last = deliverSMS(phone, text)
-	}
-	payload, _ := json.Marshal(map[string]string{"to": phone, "text": text, "ref": ref})
-	_, _ = s.db.Exec(`INSERT INTO notification_jobs (id, channel, payload, status, last_error, created_at) VALUES (?,?,?,?,?,?)`,
-		newID(), "sms", string(payload), status, last, s.now().UTC().Format(time.RFC3339))
-}
-
 func (s *Service) sendBookingReceipt(out map[string]any, origin string) {
 	if out == nil {
 		return
 	}
-	token, _ := out["receiptToken"].(string)
+	_ = origin
+	businessID, _ := out["businessId"].(string)
 	phone, _ := out["customerPhone"].(string)
-	id, _ := out["id"].(string)
-	if !smsReady() {
-		return
-	}
-	s.queueSMS(phone, customerReceiptText("booking", receiptLink(origin, token)), id)
+	service, _ := out["serviceName"].(string)
+	biz, _ := out["businessName"].(string)
+	starts, _ := out["startsAt"].(string)
+	zone, _ := out["timezone"].(string)
+	date, clock := smsWhen(starts, zone)
+	s.sendCustomerSMS(businessID, phone, "book", map[string]string{
+		"token10": cleanToken(service, 5, 12),
+		"token20": cleanToken(biz, 8, 18),
+		"token2":  date,
+		"token3":  clock,
+	})
 }
 
 func (s *Service) attachReceipt(out map[string]any, id string) {

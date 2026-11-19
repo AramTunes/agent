@@ -21,6 +21,9 @@ export function writeToken(token: string | null) {
   } catch {
     /* storage unavailable */
   }
+  if (typeof document === "undefined") return;
+  if (token) document.cookie = `agent_token=${encodeURIComponent(token)}; Path=/; Max-Age=2592000; SameSite=Lax`;
+  else document.cookie = "agent_token=; Path=/; Max-Age=0; SameSite=Lax";
 }
 
 function resolvePath(path: string) {
@@ -145,6 +148,14 @@ export const setOrderStatusFn = (args: { data: unknown }) => post<any>("/api/v1/
 export const setOrderWhenFn = (args: { data: unknown }) => post<any>("/api/v1/orders/when", args.data);
 export const shopHoursFn = (args: { data: unknown }) => post<any>("/api/v1/shop-hours/get", args.data);
 export const saveShopHoursFn = (args: { data: unknown }) => post<any>("/api/v1/shop-hours/save", args.data);
+export const publicTablesFn = (slug: string) => get<any>(`/api/v1/business/${encodeURIComponent(slug)}/tables`);
+export const reserveTableFn = (args: { data: unknown }) => post<any>("/api/v1/table-reservations", args.data);
+export const tablesFn = (args: { data: unknown }) => post<any>("/api/v1/tables/list", args.data);
+export const saveTableFn = (args: { data: unknown }) => post<any>("/api/v1/tables/save", args.data);
+export const deleteTableFn = (args: { data: unknown }) => post<any>("/api/v1/tables/delete", args.data);
+export const tableReservationsFn = (args: { data: unknown }) => post<any>("/api/v1/tables/reservations", args.data);
+export const releaseTableFn = (args: { data: unknown }) => post<any>("/api/v1/tables/release", args.data);
+export const cancelTableFn = (args: { data: unknown }) => post<any>("/api/v1/tables/cancel", args.data);
 
 function visitorId() {
   if (typeof window === "undefined") return "";
@@ -226,11 +237,28 @@ export const supportTicketsFn = () => get<any>("/api/v1/support/tickets");
 export const createSupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets", args.data);
 export const replySupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets/reply", args.data);
 export const closeSupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets/close", args.data);
+export const reopenSupportTicketFn = (args: { data: unknown }) => post<any>("/api/v1/support/tickets/reopen", args.data);
+export const adminSupportFn = () => get<any>("/api/v1/admin/support");
+export const adminSupportReplyFn = (args: { data: unknown }) => post<any>("/api/v1/admin/support/reply", args.data);
+export const adminSupportCloseFn = (args: { data: unknown }) => post<any>("/api/v1/admin/support/close", args.data);
+export const adminSupportReopenFn = (args: { data: unknown }) => post<any>("/api/v1/admin/support/reopen", args.data);
 export const adminOverviewFn = () => get<any>("/api/v1/admin/overview");
 export const adminUsersFn = (args: { data: unknown }) => post<any>("/api/v1/admin/users", args.data);
+export const adminUserAccessFn = (args: { data: unknown }) => post<any>("/api/v1/admin/users/access", args.data);
+export const adminUserAdminFn = (args: { data: unknown }) => post<any>("/api/v1/admin/users/admin", args.data);
+export const adminSearchFn = (args: { data: unknown }) => post<any>("/api/v1/admin/search", args.data);
 export const adminBusinessesFn = (args: { data: unknown }) => post<any>("/api/v1/admin/businesses", args.data);
+export const adminBusinessFileFn = (args: { data: unknown }) => post<any>("/api/v1/admin/business", args.data);
 export const moderateBusinessFn = (args: { data: unknown }) => post<any>("/api/v1/admin/moderate", args.data);
+export const adminDeleteMediaFn = (args: { data: unknown }) => post<any>("/api/v1/admin/media/delete", args.data);
+export const adminGrantSmsFn = (args: { data: unknown }) => post<any>("/api/v1/admin/sms", args.data);
+export const adminPaymentsFn = (args: { data: unknown }) => post<any>("/api/v1/admin/payments", args.data);
 export const adminCategoriesFn = () => get<any>("/api/v1/admin/categories");
 export const saveCategoryFn = (args: { data: unknown }) => post<any>("/api/v1/admin/categories", args.data);
-export const adminAuditFn = () => get<any>("/api/v1/admin/audit");
+export const moveCategoryFn = (args: { data: unknown }) => post<any>("/api/v1/admin/categories/move", args.data);
+export const deleteCategoryFn = (args: { data: unknown }) => post<any>("/api/v1/admin/categories/delete", args.data);
+export const adminAuditFn = (args: { data?: unknown } = {}) => post<any>("/api/v1/admin/audit", args.data ?? {});
 export const saveSettingsFn = (args: { data: unknown }) => post<any>("/api/v1/admin/settings", args.data);
+export const setGatewayFn = (args: { data: unknown }) => post<any>("/api/v1/admin/gateways", args.data);
+export const startPaymentFn = (args: { data: unknown }) => post<any>("/api/v1/payments/start", args.data);
+export const saveSmsPrefsFn = (args: { data: unknown }) => post<any>("/api/v1/sms/prefs", args.data);

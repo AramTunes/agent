@@ -10,8 +10,6 @@ import (
 )
 
 func (s *Service) Reports(userID string, raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	businessID, _ := textOf(raw, "businessId", 80, "")
 	role, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff")
 	if err != nil {

@@ -847,14 +847,59 @@ func cleanLinkURL(value string) (string, error) {
 func (s *Service) DeleteBusiness(userID, businessID string) (any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	businessID = strings.TrimSpace(businessID)
 	if _, err := s.requireRole(s.db, userID, businessID, "owner"); err != nil {
 		return nil, err
 	}
-	_ = s.audit(s.db, userID, "delete_business", "business", strPtr(businessID), strPtr(businessID), "")
-	_, err := s.db.Exec(`DELETE FROM businesses WHERE id = ? AND owner_user_id = ?`, businessID, userID)
+	err := s.tx(func(tx *sql.Tx) error {
+		if err := s.audit(tx, userID, "delete_business", "business", strPtr(businessID), strPtr(businessID), ""); err != nil {
+			return err
+		}
+		steps := []struct {
+			sql  string
+			args []any
+		}{
+			{`DELETE FROM staff_services WHERE staff_id IN (SELECT id FROM staff WHERE business_id = ?) OR service_id IN (SELECT id FROM services WHERE business_id = ?)`, []any{businessID, businessID}},
+			{`DELETE FROM working_hours WHERE staff_id IN (SELECT id FROM staff WHERE business_id = ?)`, []any{businessID}},
+			{`DELETE FROM breaks WHERE staff_id IN (SELECT id FROM staff WHERE business_id = ?)`, []any{businessID}},
+			{`DELETE FROM customer_notes WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM bookings WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM menu_orders WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM table_reservations WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM dining_tables WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM holidays WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM shop_hours WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM customers WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM customer_groups WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM services WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM staff WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM branches WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM memberships WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM notifications WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM subscriptions WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM sms_wallets WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM sms_prefs WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_views WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_view_days WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_view_visitors WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_clicks WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_view_hours WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_facets WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_dwell WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM page_block_views WHERE business_id = ?`, []any{businessID}},
+			{`DELETE FROM businesses WHERE id = ? AND owner_user_id = ?`, []any{businessID, userID}},
+		}
+		for _, step := range steps {
+			if _, err := tx.Exec(step.sql, step.args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
+	removeBusinessMedia(businessID)
 	return map[string]any{"deleted": true}, nil
 }
 
@@ -1150,8 +1195,8 @@ func (s *Service) StaffInvite(token string) (any, error) {
 }
 
 func (s *Service) StaffInviteCode(raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lock()
+	defer unlock()
 	row, err := s.inviteRow(strings.TrimSpace(mustString(raw, "token")))
 	if err != nil {
 		return nil, err
@@ -1172,6 +1217,10 @@ func (s *Service) StaffInviteCode(raw map[string]any) (any, error) {
 	if _, err := s.db.Exec(`INSERT INTO phone_codes (id, phone, purpose, code_hash, expires_at) VALUES (?,?, 'staff', ?, ?)`,
 		newID(), row.phone, hashCode(row.phone, "staff", code), exp); err != nil {
 		return nil, err
+	}
+	unlock()
+	if s.sendPlatformCode(row.phone, code) {
+		return map[string]any{"sent": true, "sms": true}, nil
 	}
 	return map[string]any{"sent": true, "code": code}, nil
 }
@@ -1932,8 +1981,6 @@ func (s *Service) DeleteCustomerGroup(userID string, raw map[string]any) (any, e
 }
 
 func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	businessID, _ := textOf(raw, "businessId", 80, "")
 	role, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff")
 	if err != nil {
@@ -2317,7 +2364,8 @@ func (s *Service) Dashboard(userID string, raw map[string]any) (any, error) {
 			"views": viewsSeries, "visitors": visitorSeries, "done": doneSeries, "revenue": revenueSeries,
 			"orders": orderSeries, "orderRevenue": orderRevenueSeries,
 		},
-		"overdue": s.overdueList(businessID, ownStaff),
+		"overdue":    s.overdueList(businessID, ownStaff),
+		"heldTables": s.heldTables(businessID),
 	}, nil
 }
 

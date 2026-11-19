@@ -15,6 +15,7 @@ const links = [
 
 export function Shell({ children, header }: { children: ReactNode; header?: ReactNode }) {
   const { user } = useCurrentUserState();
+  const account = useAccount();
   const [menuOpen, setMenuOpen] = useState(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
@@ -106,7 +107,7 @@ export function Shell({ children, header }: { children: ReactNode; header?: Reac
                 {link.label}
               </a>
             ))}
-            {user ? (
+            {user && account.me?.isAdmin ? (
               <Link
                 to="/admin"
                 className="shrink-0 rounded-lg px-3 py-2 text-muted hover:bg-card hover:text-ink"
@@ -165,7 +166,7 @@ export function Shell({ children, header }: { children: ReactNode; header?: Reac
                   {link.label}
                 </Link>
               ))}
-              {user ? (
+              {user && account.me?.isAdmin ? (
                 <Link
                   to="/admin"
                   className="rounded-xl px-3 py-3 text-base text-muted hover:bg-card hover:text-ink"

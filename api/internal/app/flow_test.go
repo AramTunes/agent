@@ -109,9 +109,9 @@ func TestSignupAndBooking(t *testing.T) {
 	}
 	svc.now = func() time.Time { return when.Add(-30 * time.Minute) }
 	svc.RemindDue()
-	var channel, status string
-	if err := db.QueryRow(`SELECT channel, status FROM notification_jobs WHERE channel = 'sms' ORDER BY created_at DESC LIMIT 1`).Scan(&channel, &status); err != nil || channel != "sms" {
-		t.Fatalf("sms reminder %s %v", channel, err)
+	var jobs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM notification_jobs WHERE channel = 'sms'`).Scan(&jobs); err != nil || jobs != 0 {
+		t.Fatalf("sms job without provider %d %v", jobs, err)
 	}
 	var inApp int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM notifications WHERE booking_id = ? AND kind = 'booking_reminder'`, booked.(map[string]any)["id"]).Scan(&inApp); err != nil || inApp != 0 {

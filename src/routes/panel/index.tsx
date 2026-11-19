@@ -8,13 +8,14 @@ import { Button, Card, Field, Skeleton, TextInput } from "@/components/ui";
 import { Select } from "@/components/ui/select";
 import { DualSpark } from "@/components/sparkline";
 import { WeekBoard } from "@/components/week-board";
-import { categoriesFn, createBusinessFn, createDemoFn, dashboardFn, manageBusinessFn, resolveFollowupFn } from "@/lib/api";
+import { categoriesFn, createBusinessFn, createDemoFn, dashboardFn, manageBusinessFn, releaseTableFn, resolveFollowupFn } from "@/lib/api";
 import { assignRandomPageAvatar, PageMark } from "@/lib/page-avatar";
 import { QrDialog } from "@/components/qr-share";
 import { faNum, toman } from "@/lib/booking/fa";
-import { formatWhen } from "@/lib/booking/format";
+import { formatSlot, formatWhen } from "@/lib/booking/format";
 import { focusKind } from "@/lib/business-focus";
-import { followups, type Followup, type OverdueBooking } from "@/lib/followups";
+import { followups, type Followup, type HeldTable, type OverdueBooking } from "@/lib/followups";
+import { CancelReasonPick, bookingCancelReasons } from "@/components/cancel-reasons";
 
 export const Route = createFileRoute("/panel/")({ component: PanelHome });
 
@@ -71,10 +72,11 @@ function PanelHome() {
   const [qrOpen, setQrOpen] = useState(false);
   const [follow, setFollow] = useState<Followup[] | null>(null);
   const [overdue, setOverdue] = useState<Overdue[]>([]);
+  const [held, setHeld] = useState<HeldTable[]>([]);
+  const [releasing, setReleasing] = useState("");
   const [services, setServices] = useState<{ id: string; name: string }[]>([]);
   const [people, setPeople] = useState<{ id: string; name: string }[]>([]);
   const [pick, setPick] = useState<Overdue | null>(null);
-  const [cancelReason, setCancelReason] = useState("");
   const [draft, setDraft] = useState({ serviceId: "", staffId: "" });
   const [schedule, setSchedule] = useState<{ timezone: string; weekly: { weekday: number; startMin: number; endMin: number }[] } | null>(null);
   const [zone, setZone] = useState("Asia/Tehran");
@@ -111,6 +113,7 @@ function PanelHome() {
       const next = res.data.stats ?? emptyStats;
       setStats({ ...next, series: res.data.series ?? emptySeries });
       setOverdue(Array.isArray(res.data.overdue) ? res.data.overdue : []);
+      setHeld(Array.isArray(res.data.heldTables) ? res.data.heldTables : []);
       if (res.data.timezone) setZone(res.data.timezone);
       if (res.data.focus === "orders" || res.data.focus === "booking") setFocus(res.data.focus);
     });
@@ -119,21 +122,20 @@ function PanelHome() {
     };
   }, [businessId]);
 
-  async function settle(status: "completed" | "cancelled" | "no_show") {
+  async function settle(status: "completed" | "cancelled" | "no_show", reason = "") {
     if (!pick) return;
-    const reason = status === "cancelled" ? cancelReason.trim() : "";
-    if (status === "cancelled" && reason.length < 2) {
+    const note = status === "cancelled" ? reason.trim() : "";
+    if (status === "cancelled" && note.length < 2) {
       toast.error("دلیل لغو را بنویسید");
       return;
     }
-    const res = await resolveFollowupFn({ data: { bookingId: pick.id, serviceId: draft.serviceId, staffId: draft.staffId, status, reason } });
+    const res = await resolveFollowupFn({ data: { bookingId: pick.id, serviceId: draft.serviceId, staffId: draft.staffId, status, reason: note } });
     if (!res.ok) {
       toast.error(res.error);
       return;
     }
     setOverdue((items) => items.filter((item) => item.id !== pick.id));
     setPick(null);
-    setCancelReason("");
     if (businessId) {
       const again = await dashboardFn({ data: { businessId } });
       if (again.ok) {
@@ -216,7 +218,7 @@ function PanelHome() {
       <Card>
         <h2 className="font-extrabold">نیاز به پیگیری</h2>
         {follow === null ? <Skeleton className="mt-3 h-12" /> : null}
-        {follow && follow.length === 0 && overdue.length === 0 ? <p className="mt-2 text-sm text-muted">موردی برای پیگیری نیست.</p> : null}
+        {follow && follow.length === 0 && overdue.length === 0 && held.length === 0 ? <p className="mt-2 text-sm text-muted">موردی برای پیگیری نیست.</p> : null}
         {follow && follow.length > 0 ? (
           <ul className="mt-3 grid gap-2">
             {follow.map((item) => (
@@ -232,6 +234,35 @@ function PanelHome() {
                     ) : null}
                   </span>
                 </Link>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {held.length > 0 ? (
+          <ul className="mt-3 grid gap-2">
+            {held.map((item) => (
+              <li key={item.id} className="rounded-lg bg-[#101011] px-3 py-3 text-sm leading-6">
+                <p className="font-semibold">میز {faNum(item.number)} · {item.customer}</p>
+                <p className="text-muted" dir="ltr">{faNum(item.phone)}</p>
+                <p>{formatSlot(item.startsAt)}</p>
+                {item.note ? <p className="text-muted">{item.note}</p> : null}
+                <button
+                  type="button"
+                  disabled={releasing === item.id}
+                  className="mt-2 inline-flex h-9 items-center rounded-full bg-ink px-3 text-xs font-semibold text-on-ink disabled:opacity-50"
+                  onClick={async () => {
+                    setReleasing(item.id);
+                    const res = await releaseTableFn({ data: { businessId, id: item.id } });
+                    setReleasing("");
+                    if (!res.ok) {
+                      toast.error(res.error);
+                      return;
+                    }
+                    setHeld((rows) => rows.filter((row) => row.id !== item.id));
+                  }}
+                >
+                  {releasing === item.id ? "در حال آزادسازی" : "آزادسازی"}
+                </button>
               </li>
             ))}
           </ul>
@@ -381,14 +412,11 @@ function PanelHome() {
                 options={people.map((item) => ({ value: item.id, label: item.name }))}
               />
             </label>
-            <label className="grid gap-1 text-sm">
-              دلیل لغو
-              <TextInput value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} placeholder="اگر لغو می‌کنید بنویسید" />
-            </label>
             <div className="grid gap-2">
+              <p className="text-sm font-semibold">برای لغو، یک دلیل را بزنید</p>
+              <CancelReasonPick reasons={bookingCancelReasons} onPick={(reason) => void settle("cancelled", reason)} />
               <button type="button" className="inline-flex h-11 items-center justify-center rounded-full bg-ink text-sm font-semibold text-on-ink" onClick={() => void settle("completed")}>انجام شد</button>
               <button type="button" className="inline-flex h-11 items-center justify-center rounded-full border border-line text-sm font-semibold" onClick={() => void settle("no_show")}>نیامد</button>
-              <button type="button" className="inline-flex h-11 items-center justify-center rounded-full border border-line text-sm font-semibold text-[#e11d2e]" onClick={() => void settle("cancelled")}>لغو شد</button>
             </div>
           </div>
         </div>

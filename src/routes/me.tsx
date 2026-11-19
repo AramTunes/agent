@@ -8,12 +8,13 @@ import { Badge, Button, Card, Empty, Field, Skeleton, TextInput } from "@/compon
 import { OtpField } from "@/components/otp-field";
 import { RedirectToSignIn } from "@/lib/auth/gates";
 import { faNum, STATUS_FA } from "@/lib/booking/fa";
-import { formatClock, formatDay, formatWhen } from "@/lib/booking/format";
+import { formatClock, formatDay, formatSlot, formatWhen } from "@/lib/booking/format";
 import { availabilityFn, markReadFn, myBookingsFn, notificationsFn, rescheduleBookingFn, resetPhonePasswordFn, revokeSessionFn, sendPhoneCodeFn, sessionsFn, setBookingStatusFn, updateProfileFn } from "@/lib/api";
 import { isInboxNote, noteTo, type AppNote } from "@/lib/notes";
 import { adoptSession, signOut } from "@/lib/session";
 import { addDaysYmd, todayYmd } from "@/lib/booking/time";
 import { usePanelFollowups } from "@/lib/followups";
+import { CancelReasonPick, customerCancelReasons } from "@/components/cancel-reasons";
 
 export const Route = createFileRoute("/me")({ component: MePage });
 
@@ -38,16 +39,18 @@ function MePage() {
   const { businessId } = useBusinessId(account.me?.memberships);
   const current = account.me?.memberships.find((item) => item.businessId === businessId);
   const personal = account.me?.profile.pageFor === "self" && current?.name === account.me?.profile.pageName;
-  const { follow, overdue, zone } = usePanelFollowups(businessId, Boolean(personal), current?.role === "staff");
+  const { follow, overdue, tables, zone } = usePanelFollowups(businessId, Boolean(personal), current?.role === "staff");
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [notes, setNotes] = useState<AppNote[]>([]);
   const [name, setName] = useState("");
   const [moveId, setMoveId] = useState("");
+  const [cancelId, setCancelId] = useState("");
   const [moveDay, setMoveDay] = useState("");
   const [slots, setSlots] = useState<{ start: string; taken?: boolean }[] | null>(null);
   const [passOpen, setPassOpen] = useState(false);
   const [passCode, setPassCode] = useState("");
   const [shownCode, setShownCode] = useState("");
+  const [smsSent, setSmsSent] = useState(false);
   const [nextPassword, setNextPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [passError, setPassError] = useState("");
@@ -98,7 +101,7 @@ function MePage() {
       <h1 className="text-3xl font-extrabold">نوبت‌های من</h1>
       <p className="mt-1 text-sm text-muted">{[
         account.me?.unread ? `${faNum(account.me.unread)} اعلان خوانده‌نشده` : "",
-        follow.length + overdue.length > 0 ? `${faNum(follow.length + overdue.length)} پیگیری` : "",
+        follow.length + overdue.length + tables.length > 0 ? `${faNum(follow.length + overdue.length + tables.length)} پیگیری` : "",
       ].filter(Boolean).join(" · ") || "اعلان داخلی، نه پیامک"}</p>
       <div className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="grid gap-3">
@@ -118,13 +121,26 @@ function MePage() {
                 <Badge>{STATUS_FA[item.status] ?? item.status}</Badge>
               </div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button variant="danger" onClick={async () => {
-                  const res = await setBookingStatusFn({ data: { bookingId: item.id, status: "cancelled", reason: "لغو توسط مشتری" } });
-                  if (!res.ok) toast.error(res.error);
-                  else { toast.success("نوبت لغو شد"); load(); }
-                }}>لغو</Button>
+                <Button variant="danger" onClick={() => setCancelId(cancelId === item.id ? "" : item.id)}>لغو</Button>
                 <Button variant="quiet" onClick={() => void openMove(item, todayYmd(item.timezone))}>جابه‌جایی</Button>
               </div>
+              {cancelId === item.id ? (
+                <div className="mt-3 grid gap-2">
+                  <p className="text-sm font-semibold">یک دلیل را بزنید تا نوبت لغو شود</p>
+                  <CancelReasonPick
+                    reasons={customerCancelReasons}
+                    onPick={async (reason) => {
+                      const res = await setBookingStatusFn({ data: { bookingId: item.id, status: "cancelled", reason } });
+                      if (!res.ok) toast.error(res.error);
+                      else {
+                        toast.success("نوبت لغو شد");
+                        setCancelId("");
+                        load();
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
               {moveId === item.id ? (
                 <div className="mt-3 grid gap-3">
                   <div className="flex gap-2 overflow-x-auto pb-1">
@@ -241,6 +257,8 @@ function MePage() {
               <p className="mt-3 rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">
                 پیامک وصل نیست. کد تأیید: <span className="font-bold" dir="ltr">{faNum(shownCode)}</span>
               </p>
+            ) : smsSent ? (
+              <p className="mt-3 rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">کد تأیید پیامک شد.</p>
             ) : null}
             {!passOpen ? (
               <Button
@@ -257,6 +275,7 @@ function MePage() {
                       return;
                     }
                     setShownCode(res.data.code ?? "");
+                    setSmsSent(Boolean(res.data.sms));
                     setPassCode("");
                     setPassOpen(true);
                   });
@@ -320,6 +339,7 @@ function MePage() {
                           return;
                         }
                         setShownCode(res.data.code ?? "");
+                        setSmsSent(Boolean(res.data.sms));
                         setPassCode("");
                       });
                     }}
@@ -375,7 +395,7 @@ function MePage() {
             <h3 className="mt-5 font-bold">سیستم و کسب‌وکار</h3>
             <p className="mt-1 text-xs leading-5 text-muted">پیگیری، تغییر وضعیت و پیام‌های خود برنامه.</p>
             <ul className="mt-2 grid gap-2">
-              {follow.length === 0 && overdue.length === 0 && notes.every((note) => isInboxNote(note.kind)) ? <li className="text-sm text-muted">اعلانی نیست.</li> : null}
+              {follow.length === 0 && overdue.length === 0 && tables.length === 0 && notes.every((note) => isInboxNote(note.kind)) ? <li className="text-sm text-muted">اعلانی نیست.</li> : null}
               {follow.map((item) => (
                 <li key={item.id}>
                   <Link to={item.to} className="block rounded-xl bg-paper px-3 py-2">
@@ -393,6 +413,15 @@ function MePage() {
                     <div className="font-semibold">تعیین وضعیت نوبت</div>
                     <p className="text-sm leading-6">{item.customer || "مشتری"}{item.phone ? ` · ${faNum(item.phone)}` : ""}</p>
                     <p className="text-xs leading-5 text-muted">{formatWhen(item.startsAt, zone)} · {item.service} · {item.staff}</p>
+                  </Link>
+                </li>
+              ))}
+              {tables.map((item) => (
+                <li key={item.id}>
+                  <Link to="/panel/orders" className="block rounded-xl bg-paper px-3 py-2">
+                    <div className="font-semibold">آزادسازی میز {faNum(item.number)}</div>
+                    <p className="text-sm leading-6">{item.customer}{item.phone ? ` · ${faNum(item.phone)}` : ""}</p>
+                    <p className="text-xs leading-5 text-muted">{formatSlot(item.startsAt)}</p>
                   </Link>
                 </li>
               ))}

@@ -411,7 +411,7 @@ function LinksPage() {
     }
   }
 
-  const pageBlocks = blocks.filter((block) => block.type !== "resume" && fitsTopic(block.type, categoryId));
+  const pageBlocks = blocks.filter((block) => fitsTopic(block.type, categoryId));
   const previewBlocks = blocks.filter((block) => fitsTopic(block.type, categoryId));
   if (role === "staff") return <Navigate to="/panel" />;
 
@@ -976,15 +976,13 @@ function Choice({ label, value, options, onChange }: { label: string; value: str
   );
 }
 
-const hiddenTypes = new Set(["form", "event", "course", "blog", "resume", "team"]);
-
 const topicTypes = new Set(["booking", "menu", "products", "services"]);
 
 function BlockPicker({ topic, onClose, onPick }: { topic: ReturnType<typeof topicBlock>; onClose: () => void; onPick: (type: BlockType) => void }) {
   const desktop = useIsDesktop();
   const body = (
     <div className="grid grid-cols-2 gap-2">
-      {catalog.filter((item) => !hiddenTypes.has(item.type) && (!topicTypes.has(item.type) || item.type === topic)).map((item) => (
+      {catalog.filter((item) => !topicTypes.has(item.type) || item.type === topic).map((item) => (
         <button key={item.type} type="button" className="flex min-h-20 flex-col justify-between rounded-xl border border-line bg-paper p-3 text-start" onClick={() => onPick(item.type)}>
           <item.icon className="size-5 text-jade" aria-hidden="true" />
           <span className="text-sm font-semibold">{item.label}</span>

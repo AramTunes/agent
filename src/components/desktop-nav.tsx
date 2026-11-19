@@ -11,6 +11,7 @@ import {
   LogOut,
   Plus,
   Settings,
+  Shield,
   UserRound,
   Users,
   Zap,
@@ -21,7 +22,7 @@ import { CreateBusinessDialog } from "@/components/dashboard-header";
 import { useAccount, useBusinessId, type Membership } from "@/components/account";
 import { markReadFn, notificationsFn } from "@/lib/api";
 import { faNum } from "@/lib/booking/fa";
-import { formatWhen } from "@/lib/booking/format";
+import { formatSlot, formatWhen } from "@/lib/booking/format";
 import { focusNav } from "@/lib/business-focus";
 import { usePanelFollowups } from "@/lib/followups";
 import { isInboxNote, noteTo, type AppNote } from "@/lib/notes";
@@ -82,6 +83,7 @@ export function DesktopChrome() {
         businessId={current?.businessId ?? ""}
         name={account.me?.profile.displayName || "حساب"}
         phone={account.me?.profile.phone ?? ""}
+        isAdmin={account.me?.isAdmin ?? false}
         image={account.me?.profile.avatar || ""}
         unread={account.me?.unread ?? 0}
         personal={account.me?.profile.pageFor === "self" && current?.name === account.me?.profile.pageName}
@@ -104,6 +106,7 @@ function DesktopSidebar({
   businessId,
   name,
   phone,
+  isAdmin,
   image,
   unread,
   personal,
@@ -115,6 +118,7 @@ function DesktopSidebar({
   businessId: string;
   name: string;
   phone: string;
+  isAdmin: boolean;
   image: string;
   unread: number;
   personal: boolean;
@@ -171,8 +175,8 @@ function DesktopSidebar({
     void navigate({ to: "/panel" });
   }
 
-  const { follow, overdue } = usePanelFollowups(businessId, personal, staff);
-  const open = follow.length + overdue.length;
+  const { follow, overdue, tables } = usePanelFollowups(businessId, personal, staff);
+  const open = follow.length + overdue.length + tables.length;
   const badge = unread + open;
   const noteLine = [
     unread > 0 ? `${faNum(unread)} خوانده‌نشده` : "",
@@ -316,6 +320,12 @@ function DesktopSidebar({
                 </span>
               </div>
               <div className="-mx-1 my-1 h-px bg-line" />
+              {isAdmin ? (
+                <Link to="/admin" role="menuitem" className={popItem} onClick={() => setMenu("")}>
+                  <Shield className="size-4 shrink-0" aria-hidden="true" />
+                  مدیریت سامانه
+                </Link>
+              ) : null}
               <Link to="/me" role="menuitem" className={popItem} onClick={() => setMenu("")}>
                 <Settings className="size-4 shrink-0" aria-hidden="true" />
                 تنظیمات حساب
@@ -354,7 +364,7 @@ function DesktopSidebar({
 
 function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessId: string; personal: boolean; staff: boolean; unread: number; onClose: () => void }) {
   const [notes, setNotes] = useState<AppNote[] | null>(null);
-  const { follow, overdue, zone } = usePanelFollowups(businessId, personal, staff);
+  const { follow, overdue, tables, zone } = usePanelFollowups(businessId, personal, staff);
   function load() {
     notificationsFn().then((res) => {
       setNotes(res.ok ? res.data : []);
@@ -367,7 +377,7 @@ function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessI
   const system = notes?.filter((note) => !isInboxNote(note.kind)) ?? [];
   const shownUnread = notes?.filter((note) => !note.read).length ?? 0;
   const extra = notes ? Math.max(0, unread - shownUnread) : 0;
-  const systemEmpty = notes !== null && system.length === 0 && follow.length === 0 && overdue.length === 0;
+  const systemEmpty = notes !== null && system.length === 0 && follow.length === 0 && overdue.length === 0 && tables.length === 0;
   return (
     <div className="absolute bottom-0 right-full z-50 mr-2 flex w-80 flex-col rounded-lg border border-line bg-card p-1 shadow-md">
       <div className="flex items-center justify-between px-2 py-1.5">
@@ -409,6 +419,15 @@ function NotesMenu({ businessId, personal, staff, unread, onClose }: { businessI
               <div className="text-sm font-medium">تعیین وضعیت نوبت</div>
               <p className="mt-0.5 text-xs leading-5">{item.customer || "مشتری"}{item.phone ? ` · ${faNum(item.phone)}` : ""}</p>
               <p className="text-xs leading-5 text-muted">{formatWhen(item.startsAt, zone)} · {item.service} · {item.staff}</p>
+            </Link>
+          </li>
+        ))}
+        {tables.map((item) => (
+          <li key={item.id}>
+            <Link to="/panel" onClick={onClose} className="block rounded-md bg-paper px-2 py-1.5">
+              <div className="text-sm font-medium">آزادسازی میز {faNum(item.number)}</div>
+              <p className="mt-0.5 text-xs leading-5">{item.customer}{item.phone ? ` · ${faNum(item.phone)}` : ""}</p>
+              <p className="text-xs leading-5 text-muted">{formatSlot(item.startsAt)}</p>
             </Link>
           </li>
         ))}

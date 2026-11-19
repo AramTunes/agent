@@ -9,6 +9,7 @@ import { WEEKDAYS_FA, enDigits, faNum } from "@/lib/booking/fa";
 import { formatDay } from "@/lib/booking/format";
 import { todayYmd } from "@/lib/booking/time";
 import { addHolidayFn, deleteBusinessFn, manageBusinessFn, removeHolidayFn, saveShopHoursFn, shopHoursFn, updateBusinessFn } from "@/lib/api";
+import { BillingPanel, type Billing } from "@/components/billing-panel";
 
 export const Route = createFileRoute("/panel/settings")({ component: SettingsPage });
 
@@ -41,6 +42,7 @@ function SettingsPage() {
   const [note, setNote] = useState("");
   const [staffId, setStaffId] = useState("");
   const [confirmName, setConfirmName] = useState("");
+  const [billing, setBilling] = useState<Billing | null>(null);
 
   function load(id: string) {
     manageBusinessFn({ data: { businessId: id } }).then((res) => {
@@ -69,6 +71,7 @@ function SettingsPage() {
       });
       setHolidays(data.holidays);
       setStaff(data.staff);
+      setBilling(data.billing ?? null);
       setDay(todayYmd(data.timezone));
     });
   }
@@ -82,7 +85,13 @@ function SettingsPage() {
   const canManage = role === "owner" || role === "manager";
 
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div className="panel-page grid gap-6">
+      <div>
+        <h1 className="text-xl font-bold">تنظیمات</h1>
+        <p className="text-sm text-muted">سیاست رزرو، تعطیلی و ساعت کاری صفحه</p>
+      </div>
+      {owner && billing ? <BillingPanel businessId={businessId} billing={billing} onChange={setBilling} /> : null}
+      <div className="grid gap-4 lg:grid-cols-2">
       <Card>
         <h2 className="text-lg font-bold">مشخصات و سیاست رزرو</h2>
         <p className="mt-1 text-sm text-muted">نشانی عمومی: /b/{form.slug}</p>
@@ -218,6 +227,7 @@ function SettingsPage() {
           </div>
         </Card>
       ) : null}
+      </div>
     </div>
   );
 }

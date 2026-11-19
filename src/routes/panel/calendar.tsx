@@ -54,7 +54,11 @@ function CalendarPage() {
   if (!businessId) return <Empty title="اول کسب‌وکار بسازید" body="از خانه پنل یک صفحه بسازید." />;
 
   return (
-    <div className="grid min-w-0 gap-4">
+    <div className="panel-page grid min-w-0 gap-6">
+      <div>
+        <h1 className="text-xl font-bold">نوبت‌ها</h1>
+        <p className="text-sm text-muted">ثبت نوبت، تخته هفته و وضعیت همان مراجعه</p>
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <button type="button" className={cardClass} onClick={() => setBookingOpen(true)}>
           <CalendarPlus className="size-5 text-[#ffa640]" aria-hidden="true" />

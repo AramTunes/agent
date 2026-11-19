@@ -24,6 +24,7 @@ function StartPage() {
   const [phone, setPhone] = useState("");
   const [code, setCode] = useState("");
   const [shownCode, setShownCode] = useState("");
+  const [smsSent, setSmsSent] = useState(false);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [categoryError, setCategoryError] = useState("");
@@ -67,7 +68,8 @@ function StartPage() {
         setError(res.error);
         return;
       }
-      setShownCode(res.data.code);
+      setShownCode(res.data.code ?? "");
+      setSmsSent(Boolean(res.data.sms));
       setCode("");
       setStep(2);
     })();
@@ -165,6 +167,8 @@ function StartPage() {
                   <p className="rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">
                     پیامک وصل نیست. کد تأیید: <span className="font-bold" dir="ltr">{faNum(shownCode)}</span>
                   </p>
+                ) : smsSent ? (
+                  <p className="rounded-xl bg-paper-deep px-3 py-2 text-sm leading-6">کد تأیید پیامک شد.</p>
                 ) : null}
                 <Field label="کد تأیید">
                   <OtpField value={code} onChange={setCode} />

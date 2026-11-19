@@ -129,7 +129,12 @@ function StaffPage() {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
+    <div className="panel-page grid gap-6">
+      <div>
+        <h1 className="text-xl font-bold">پرسنل</h1>
+        <p className="text-sm text-muted">ساعت کاری، خدمت‌ها و لینک دعوت هر نفر</p>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
       <div className="grid content-start gap-2">
         <Button type="button" variant="quiet" onClick={reset}>پرسنل تازه</Button>
         {staff.length === 0 ? <p className="text-sm text-muted">هنوز پرسنلی ثبت نشده.</p> : null}
@@ -297,6 +302,7 @@ function StaffPage() {
           ) : null}
         </form>
       </Card>
+      </div>
     </div>
   );
 }

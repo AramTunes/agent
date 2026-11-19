@@ -14,8 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"golang.org/x/crypto/bcrypt"
 	"agent/internal/booking"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -28,10 +28,11 @@ var (
 )
 
 type Service struct {
-	db   *sql.DB
-	mu   sync.Mutex
-	hits map[string][]time.Time
-	now  func() time.Time
+	db     *sql.DB
+	mu     sync.Mutex
+	rateMu sync.Mutex
+	hits   map[string][]time.Time
+	now    func() time.Time
 }
 
 func New(db *sql.DB) *Service {
@@ -188,7 +189,20 @@ func like(q string) string {
 	return "%" + r.Replace(q) + "%"
 }
 
+func (s *Service) lock() func() {
+	s.mu.Lock()
+	released := false
+	return func() {
+		if !released {
+			released = true
+			s.mu.Unlock()
+		}
+	}
+}
+
 func (s *Service) rate(key string, limit int, window time.Duration) bool {
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
 	now := s.now()
 	prev := s.hits[key]
 	recent := make([]time.Time, 0, len(prev)+1)

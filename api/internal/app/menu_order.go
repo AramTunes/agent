@@ -14,8 +14,8 @@ import (
 var clockRe = regexp.MustCompile(`^([01]\d|2[0-3]):[0-5]\d$`)
 
 func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	unlock := s.lock()
+	defer unlock()
 	slug := strings.TrimSpace(mustString(raw, "slug"))
 	if slug == "" || !s.rate("menu-order:"+slug, 40, time.Hour) {
 		if slug == "" {
@@ -29,6 +29,9 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 	}
 	if b.Status != "active" {
 		return nil, fail(404, "NOT_FOUND", "این صفحه در دسترس نیست")
+	}
+	if err := s.commerceOpen(s.db, b.ID); err != nil {
+		return nil, err
 	}
 	name := strings.TrimSpace(mustString(raw, "name"))
 	name = strings.ReplaceAll(name, "\n", " ")
@@ -151,10 +154,12 @@ func (s *Service) PlaceMenuOrder(raw map[string]any) (any, error) {
 		body += "\nیادداشت: " + note
 	}
 	s.notify(s.db, s.orderWatchers(s.db, b.ID), b.ID, id, "menu_order", "سفارش جدید", body)
-	if smsReady() {
-		link := receiptLink(safeOrigin(mustString(raw, "origin")), token)
-		s.queueSMS(phone, customerReceiptText("order", link), id)
-	}
+	bizID, bizName := b.ID, b.Name
+	unlock()
+	s.sendCustomerSMS(bizID, phone, "order", map[string]string{
+		"token20": cleanToken(bizName, 8, 18),
+		"token2":  faDigits(strconv.Itoa(total)),
+	})
 	return map[string]any{"id": id, "receiptToken": token}, nil
 }
 
@@ -303,7 +308,7 @@ func (s *Service) ListOrders(userID string, raw map[string]any) (any, error) {
 		return nil, err
 	}
 	rows, err := s.db.Query(`
-		SELECT id, customer_name, phone, address, note, status, when_kind, fulfill_at, created_at, price, currency, priced, lines
+		SELECT id, customer_name, phone, address, note, status, when_kind, fulfill_at, created_at, price, currency, priced, lines, cancel_reason
 		FROM menu_orders WHERE business_id = ? ORDER BY created_at DESC`, businessID)
 	if err != nil {
 		return nil, err
@@ -311,9 +316,9 @@ func (s *Service) ListOrders(userID string, raw map[string]any) (any, error) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, name, phone, address, note, status, whenKind, fulfill, created, currency, lines string
+		var id, name, phone, address, note, status, whenKind, fulfill, created, currency, lines, reason string
 		var price, priced int
-		if err := rows.Scan(&id, &name, &phone, &address, &note, &status, &whenKind, &fulfill, &created, &price, &currency, &priced, &lines); err != nil {
+		if err := rows.Scan(&id, &name, &phone, &address, &note, &status, &whenKind, &fulfill, &created, &price, &currency, &priced, &lines, &reason); err != nil {
 			return nil, err
 		}
 		var parsed any
@@ -324,7 +329,7 @@ func (s *Service) ListOrders(userID string, raw map[string]any) (any, error) {
 		out = append(out, map[string]any{
 			"id": id, "name": name, "phone": phone, "address": address, "note": note, "status": status,
 			"whenKind": whenKind, "fulfillAt": fulfill, "createdAt": created,
-			"price": price, "currency": currency, "priced": priced != 0, "lines": parsed,
+			"price": price, "currency": currency, "priced": priced != 0, "lines": parsed, "cancelReason": reason,
 		})
 	}
 	return out, rows.Err()
@@ -345,7 +350,11 @@ func (s *Service) SetOrderStatus(userID string, raw map[string]any) (any, error)
 	if _, err := s.requireRole(s.db, userID, businessID, "owner", "manager", "staff"); err != nil {
 		return nil, err
 	}
-	res, err := s.db.Exec(`UPDATE menu_orders SET status = ? WHERE id = ? AND business_id = ?`, status, orderID, businessID)
+	reason, _ := textOf(raw, "reason", 200, "")
+	if status != "cancelled" {
+		reason = ""
+	}
+	res, err := s.db.Exec(`UPDATE menu_orders SET status = ?, cancel_reason = ? WHERE id = ? AND business_id = ?`, status, strings.TrimSpace(reason), orderID, businessID)
 	if err != nil {
 		return nil, err
 	}

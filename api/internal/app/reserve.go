@@ -207,7 +207,7 @@ func (s *Service) Availability(raw map[string]any) (any, error) {
 
 const bookingSelect = `
 SELECT b.id, b.business_id, b.service_id, b.staff_id, b.customer_id, b.customer_user_id, b.created_by_user_id,
-       b.starts_at, b.ends_at, b.status, b.source, b.note, b.cancel_reason,
+       b.starts_at, b.ends_at, b.buffer_until, b.status, b.source, b.note, b.cancel_reason,
        s.name, st.name, biz.name, biz.slug, biz.timezone, biz.avatar,
        COALESCE(NULLIF(c.name, ''), b.customer_name, ''), COALESCE(NULLIF(c.phone, ''), b.customer_phone, ''), COALESCE(c.email, ''), COALESCE(c.customer_note, ''),
        COALESCE(b.price_toman, s.price_toman), s.duration_minutes
@@ -218,16 +218,16 @@ JOIN businesses biz ON biz.id = b.business_id
 LEFT JOIN customers c ON c.id = b.customer_id`
 
 type bookRow struct {
-	ID, BusinessID, ServiceID, StaffID, CustomerID, CreatedBy, Starts, Ends, Status, Source, Note, Reason string
-	CustomerUser                                                                                          sql.NullString
-	ServiceName, StaffName, BizName, Slug, Timezone, Avatar, CustName, CustPhone, CustEmail, CustomerNote string
-	Price, Duration                                                                                       int
+	ID, BusinessID, ServiceID, StaffID, CustomerID, CreatedBy, Starts, Ends, Buffer, Status, Source, Note, Reason string
+	CustomerUser                                                                                                  sql.NullString
+	ServiceName, StaffName, BizName, Slug, Timezone, Avatar, CustName, CustPhone, CustEmail, CustomerNote         string
+	Price, Duration                                                                                               int
 }
 
 func scanBook(row interface{ Scan(...any) error }) (bookRow, error) {
 	var b bookRow
 	err := row.Scan(&b.ID, &b.BusinessID, &b.ServiceID, &b.StaffID, &b.CustomerID, &b.CustomerUser, &b.CreatedBy,
-		&b.Starts, &b.Ends, &b.Status, &b.Source, &b.Note, &b.Reason,
+		&b.Starts, &b.Ends, &b.Buffer, &b.Status, &b.Source, &b.Note, &b.Reason,
 		&b.ServiceName, &b.StaffName, &b.BizName, &b.Slug, &b.Timezone, &b.Avatar, &b.CustName, &b.CustPhone, &b.CustEmail, &b.CustomerNote, &b.Price, &b.Duration)
 	return b, err
 }
@@ -240,7 +240,7 @@ func bookDTO(b bookRow, reveal bool) map[string]any {
 	return map[string]any{
 		"id": b.ID, "businessId": b.BusinessID, "businessName": b.BizName, "businessSlug": b.Slug, "timezone": b.Timezone, "avatar": b.Avatar,
 		"serviceId": b.ServiceID, "serviceName": b.ServiceName, "staffId": b.StaffID, "staffName": b.StaffName,
-		"startsAt": b.Starts, "endsAt": b.Ends, "status": b.Status, "source": b.Source, "note": b.Note, "cancelReason": b.Reason,
+		"startsAt": b.Starts, "endsAt": b.Ends, "bufferUntil": b.Buffer, "status": b.Status, "source": b.Source, "note": b.Note, "cancelReason": b.Reason,
 		"priceToman": b.Price, "durationMinutes": b.Duration, "customerName": name, "customerPhone": phone, "customerEmail": email, "customerNote": b.CustomerNote, "mine": true,
 	}
 }
@@ -267,7 +267,7 @@ func (s *Service) notify(q querier, userIDs []string, businessID, bookingID, kin
 }
 
 func (s *Service) memberIDs(q querier, businessID string) []string {
-	rows, err := q.Query(`SELECT user_id FROM memberships WHERE business_id = ? AND role IN ('owner','manager')`, businessID)
+	rows, err := q.Query(`SELECT user_id FROM memberships WHERE business_id = ? AND role = 'owner'`, businessID)
 	if err != nil {
 		return nil
 	}

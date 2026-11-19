@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"io"
 	"net/url"
 	"os"
@@ -49,29 +50,9 @@ func (s *Service) SavePageVideo(userID, businessID string, src io.Reader, ext st
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(mediaRoot(), businessID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	name := newToken()[:32] + ext
-	dest := filepath.Join(dir, name)
-	file, err := os.Create(dest)
+	name, _, err := storeUpload(businessID, ext, src, 40<<20, "حجم فیلم بیشتر از ۴۰ مگابایت است")
 	if err != nil {
 		return "", err
-	}
-	defer file.Close()
-	n, err := io.Copy(file, io.LimitReader(src, 40<<20+1))
-	if err != nil {
-		_ = os.Remove(dest)
-		return "", err
-	}
-	if n > 40<<20 {
-		_ = os.Remove(dest)
-		return "", fail(400, "VALIDATION", "حجم فیلم بیشتر از ۴۰ مگابایت است")
-	}
-	if n == 0 {
-		_ = os.Remove(dest)
-		return "", fail(400, "VALIDATION", "فیلم خالی است")
 	}
 	return "/api/v1/media/" + businessID + "/" + name, nil
 }
@@ -90,6 +71,26 @@ func (s *Service) SavePageFile(userID, businessID string, src io.Reader, ext str
 	if err != nil {
 		return "", 0, err
 	}
+	name, n, err := storeUpload(businessID, ext, src, 40<<20, "حجم فایل بیشتر از ۴۰ مگابایت است. فایل را جای دیگری بگذارید و نشانی‌اش را وارد کنید")
+	if err != nil {
+		return "", 0, err
+	}
+	return "/api/v1/media/" + businessID + "/" + name, n, nil
+}
+
+func storeUpload(businessID, ext string, src io.Reader, limit int64, tooBig string) (string, int64, error) {
+	head := make([]byte, 512)
+	n, err := io.ReadAtLeast(src, head, 1)
+	if n == 0 {
+		return "", 0, fail(400, "VALIDATION", "فایل خالی است")
+	}
+	if err != nil && err != io.ErrUnexpectedEOF {
+		return "", 0, fail(400, "VALIDATION", "فایل درست نرسید. دوباره انتخاب کنید")
+	}
+	head = head[:n]
+	if !extMatches(ext, contentKind(head)) {
+		return "", 0, fail(400, "VALIDATION", "نوع فایل با محتوا یکی نیست")
+	}
 	dir := filepath.Join(mediaRoot(), businessID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", 0, err
@@ -101,20 +102,201 @@ func (s *Service) SavePageFile(userID, businessID string, src io.Reader, ext str
 		return "", 0, err
 	}
 	defer file.Close()
-	n, err := io.Copy(file, io.LimitReader(src, 40<<20+1))
+	written, err := io.Copy(file, io.LimitReader(io.MultiReader(bytes.NewReader(head), src), limit+1))
 	if err != nil {
 		_ = os.Remove(dest)
-		return "", 0, err
+		return "", 0, fail(400, "VALIDATION", "فایل درست نرسید. دوباره انتخاب کنید")
 	}
-	if n > 40<<20 {
+	if written > limit {
 		_ = os.Remove(dest)
-		return "", 0, fail(400, "VALIDATION", "حجم فایل بیشتر از ۴۰ مگابایت است. فایل را جای دیگری بگذارید و نشانی‌اش را وارد کنید")
+		return "", 0, fail(400, "VALIDATION", tooBig)
 	}
-	if n == 0 {
-		_ = os.Remove(dest)
-		return "", 0, fail(400, "VALIDATION", "فایل خالی است")
+	return name, written, nil
+}
+
+func contentKind(head []byte) string {
+	if len(head) >= 3 && head[0] == 0xFF && head[1] == 0xD8 && head[2] == 0xFF {
+		return "jpeg"
 	}
-	return "/api/v1/media/" + businessID + "/" + name, n, nil
+	if len(head) >= 8 && string(head[:8]) == "\x89PNG\r\n\x1a\n" {
+		return "png"
+	}
+	if len(head) >= 6 && (string(head[:6]) == "GIF87a" || string(head[:6]) == "GIF89a") {
+		return "gif"
+	}
+	if len(head) >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WEBP" {
+		return "webp"
+	}
+	if len(head) >= 12 && string(head[:4]) == "RIFF" && string(head[8:12]) == "WAVE" {
+		return "wav"
+	}
+	if len(head) >= 5 && string(head[:5]) == "%PDF-" {
+		return "pdf"
+	}
+	if len(head) >= 4 && head[0] == 'P' && head[1] == 'K' && (head[2] == 3 || head[2] == 5 || head[2] == 7) {
+		return "zip"
+	}
+	if len(head) >= 4 && head[0] == 0xD0 && head[1] == 0xCF && head[2] == 0x11 && head[3] == 0xE0 {
+		return "ole"
+	}
+	if len(head) >= 4 && string(head[:4]) == "OggS" {
+		return "ogg"
+	}
+	if len(head) >= 3 && string(head[:3]) == "ID3" {
+		return "mp3"
+	}
+	if len(head) >= 2 && head[0] == 0xFF && head[1]&0xE0 == 0xE0 {
+		return "mp3"
+	}
+	if len(head) >= 4 && head[0] == 0x1A && head[1] == 0x45 && head[2] == 0xDF && head[3] == 0xA3 {
+		return "webm"
+	}
+	if len(head) >= 12 && string(head[4:8]) == "ftyp" {
+		return "mp4"
+	}
+	if looksHTML(head) {
+		return "html"
+	}
+	if looksText(head) {
+		return "text"
+	}
+	return "bin"
+}
+
+func looksHTML(head []byte) bool {
+	s := strings.ToLower(strings.TrimSpace(string(head)))
+	return strings.HasPrefix(s, "<!doctype html") || strings.HasPrefix(s, "<html") || strings.HasPrefix(s, "<script") || strings.HasPrefix(s, "<?php")
+}
+
+func looksText(head []byte) bool {
+	if !utf8.Valid(head) {
+		return false
+	}
+	return !bytes.Contains(head, []byte{0})
+}
+
+func extMatches(ext, kind string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg":
+		return kind == "jpeg"
+	case ".png":
+		return kind == "png"
+	case ".gif":
+		return kind == "gif"
+	case ".webp":
+		return kind == "webp"
+	case ".pdf":
+		return kind == "pdf"
+	case ".zip", ".docx", ".xlsx", ".pptx":
+		return kind == "zip"
+	case ".doc", ".xls", ".ppt":
+		return kind == "ole"
+	case ".txt", ".csv":
+		return kind == "text"
+	case ".mp3":
+		return kind == "mp3"
+	case ".wav":
+		return kind == "wav"
+	case ".ogg":
+		return kind == "ogg"
+	case ".mp4", ".mov", ".m4a":
+		return kind == "mp4"
+	case ".webm":
+		return kind == "webm"
+	default:
+		return false
+	}
+}
+
+func ContentKind(head []byte) string { return contentKind(head) }
+
+func MediaPublic(name string) bool { return mediaPublicName(name) }
+
+func mediaPublicName(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp4", ".webm", ".mov", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp3", ".wav", ".ogg", ".m4a":
+		return true
+	default:
+		return false
+	}
+}
+
+func MediaType(kind string) string {
+	switch kind {
+	case "jpeg":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "webp":
+		return "image/webp"
+	case "pdf":
+		return "application/pdf"
+	case "mp4":
+		return "video/mp4"
+	case "webm":
+		return "video/webm"
+	case "mp3":
+		return "audio/mpeg"
+	case "wav":
+		return "audio/wav"
+	case "ogg":
+		return "audio/ogg"
+	case "text":
+		return "text/plain; charset=utf-8"
+	case "zip":
+		return "application/octet-stream"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func (s *Service) OpenMedia(token, businessID, name string) (string, error) {
+	path, err := s.PageVideoPath(businessID, name)
+	if err != nil {
+		return "", err
+	}
+	if mediaPublicName(name) {
+		return path, nil
+	}
+	if !s.canReadMedia(token, businessID) {
+		return "", fail(404, "NOT_FOUND", "فایل پیدا نشد")
+	}
+	return path, nil
+}
+
+func (s *Service) canReadMedia(token, businessID string) bool {
+	userID, err := s.UserID(token)
+	if err != nil {
+		return false
+	}
+	if ok, _ := s.isAdmin(s.db, userID); ok {
+		return true
+	}
+	role, err := s.roleOf(s.db, userID, businessID)
+	if err != nil || role == "" {
+		return false
+	}
+	if role == "manager" {
+		role = "staff"
+	}
+	return role == "owner" || role == "staff"
+}
+
+func removeBusinessMedia(businessID string) {
+	if !mediaID.MatchString(businessID) {
+		return
+	}
+	root, err := filepath.Abs(mediaRoot())
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(root, businessID)
+	if !strings.HasPrefix(dir, root+string(os.PathSeparator)) {
+		return
+	}
+	_ = os.RemoveAll(dir)
 }
 
 func MediaError(msg string) error {

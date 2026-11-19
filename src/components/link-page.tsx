@@ -29,6 +29,7 @@ import {
   Type,
   Users,
   UtensilsCrossed,
+  Armchair,
   Video,
   X,
   Youtube,
@@ -250,6 +251,7 @@ export function CustomerLink({
   fill = false,
   className = "",
   design,
+  reserve = false,
 }: {
   name: string;
   bio: string;
@@ -261,8 +263,9 @@ export function CustomerLink({
   fill?: boolean;
   className?: string;
   design?: PageDesign;
+  reserve?: boolean;
 }) {
-  const shown = blocks.filter((item) => item.active !== false && item.type !== "resume" && item.type !== "design");
+  const shown = blocks.filter((item) => item.active !== false && item.type !== "design");
   const footers = shown.filter((item) => item.type === "social" && item.layout === "footer");
   const listed = shown.filter((item) => !(item.type === "social" && item.layout === "footer"));
   const photo = image || avatar || "";
@@ -356,6 +359,18 @@ export function CustomerLink({
               </li>
             );
           })}
+          {reserve ? (
+            <li>
+              <Link to="/b/$slug/$page" params={{ slug, page: "table" }} className={row.className} style={row.style}>
+                <Armchair className={cn("size-6 shrink-0", row.style ? "" : "text-white")} aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block truncate text-base font-medium leading-6">رزرو میز</span>
+                  {design?.layout === "card" ? null : <span className={cn("mt-0.5 block truncate text-sm leading-5", row.style ? "opacity-70" : "text-white/55")}>انتخاب میز و ساعت</span>}
+                </span>
+                {design?.layout === "card" ? null : <ChevronLeft className={cn("ms-auto size-6 shrink-0", row.style ? "opacity-70" : "text-white/75")} aria-hidden="true" />}
+              </Link>
+            </li>
+          ) : null}
         </ul>
         <div className="mt-auto flex flex-col items-center pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-12">
           {footers.map((block) => (
@@ -951,6 +966,7 @@ export function CustomerLinkStage(props: {
   slug: string;
   blocks: CustomerBlock[];
   design?: PageDesign;
+  reserve?: boolean;
 }) {
   const frame = useRef<HTMLDivElement>(null);
   useEffect(() => {

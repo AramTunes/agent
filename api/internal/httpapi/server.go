@@ -2,10 +2,11 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -30,7 +31,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 48<<20)
 		if err := r.ParseMultipartForm(8 << 20); err != nil {
-			s.ok(w, nil, app.MediaError("حجم فایل بیشتر از حد مجاز است"))
+			s.ok(w, nil, uploadErr(err))
 			return
 		}
 		file, header, err := r.FormFile("file")
@@ -50,16 +51,12 @@ func (s *Server) Handler() http.Handler {
 		s.ok(w, map[string]any{"url": url}, err)
 	})
 	mux.HandleFunc("GET /api/v1/media/{businessId}/{name}", func(w http.ResponseWriter, r *http.Request) {
-		path, err := s.App.PageVideoPath(r.PathValue("businessId"), r.PathValue("name"))
+		path, err := s.App.OpenMedia(requestToken(r), r.PathValue("businessId"), r.PathValue("name"))
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		if app.IsDocument(path) {
-			name := app.AttachmentName(r.URL.Query().Get("name"))
-			w.Header().Set("Content-Disposition", "attachment; filename=\"download\"; filename*=UTF-8''"+url.PathEscape(name))
-		}
-		http.ServeFile(w, r, path)
+		serveStored(w, r, path)
 	})
 	mux.HandleFunc("GET /api/v1/categories", func(w http.ResponseWriter, r *http.Request) {
 		s.send(w, func() (any, error) { return s.App.ListCategories() })
@@ -72,7 +69,10 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /api/v1/business/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		country, city := app.LookupPlace(clientIP(r))
+		country, city := app.LookupPlace(app.ClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For")))
+		if country == "" {
+			country = app.CountryFromZone(q.Get("tz"))
+		}
 		s.send(w, func() (any, error) {
 			return s.App.PublicBusiness(r.PathValue("slug"), q.Get("v"), q.Get("src"), q.Get("device"), country, city)
 		})
@@ -81,7 +81,11 @@ func (s *Server) Handler() http.Handler {
 		s.send(w, func() (any, error) { return s.App.NoteClick(r.PathValue("slug")) })
 	})
 	mux.HandleFunc("POST /api/v1/business/{slug}/stay", func(w http.ResponseWriter, r *http.Request) {
-		raw := body(r)
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
 		seconds := 0
 		switch n := raw["seconds"].(type) {
 		case float64:
@@ -90,13 +94,32 @@ func (s *Server) Handler() http.Handler {
 		s.send(w, func() (any, error) { return s.App.NoteStay(r.PathValue("slug"), seconds) })
 	})
 	mux.HandleFunc("POST /api/v1/business/{slug}/block", func(w http.ResponseWriter, r *http.Request) {
-		raw := body(r)
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
 		id, _ := raw["id"].(string)
 		label, _ := raw["label"].(string)
 		s.send(w, func() (any, error) { return s.App.NoteBlock(r.PathValue("slug"), id, label) })
 	})
+	mux.HandleFunc("GET /api/v1/business/{slug}/tables", func(w http.ResponseWriter, r *http.Request) {
+		s.send(w, func() (any, error) { return s.App.PublicDining(r.PathValue("slug")) })
+	})
+	mux.HandleFunc("POST /api/v1/table-reservations", func(w http.ResponseWriter, r *http.Request) {
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.ReserveTable(raw) })
+	})
 	mux.HandleFunc("POST /api/v1/menu-orders", func(w http.ResponseWriter, r *http.Request) {
-		raw := body(r)
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
 		raw["origin"] = requestOrigin(r)
 		s.send(w, func() (any, error) { return s.App.PlaceMenuOrder(raw) })
 	})
@@ -116,40 +139,90 @@ func (s *Server) Handler() http.Handler {
 		writeOK(w, map[string]any{"user": user})
 	})
 	mux.HandleFunc("POST /api/v1/auth/lookup", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.LookupPhone(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.LookupPhone(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/code", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.SendCode(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.SendCode(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/password", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.SignInPassword(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.SignInPassword(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/code-login", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.SignInCode(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.SignInCode(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/reset", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.ResetPassword(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.ResetPassword(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/start", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.StartAccount(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.StartAccount(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/register", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.RegisterPerson(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.RegisterPerson(raw) })
 	})
 	mux.HandleFunc("GET /api/v1/invites/{token}", func(w http.ResponseWriter, r *http.Request) {
 		s.send(w, func() (any, error) { return s.App.StaffInvite(r.PathValue("token")) })
 	})
 	mux.HandleFunc("POST /api/v1/invites/code", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.StaffInviteCode(body(r)) })
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.StaffInviteCode(raw) })
 	})
 	mux.HandleFunc("POST /api/v1/invites/accept", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.AcceptStaffInvite(withDevice(r)) })
+		raw, err := withDevice(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.AcceptStaffInvite(raw) })
 	})
 	mux.HandleFunc("GET /api/v1/me/sessions", func(w http.ResponseWriter, r *http.Request) {
 		s.send(w, func() (any, error) { return s.App.ListSessions(bearer(r)) })
 	})
 	mux.HandleFunc("POST /api/v1/me/sessions/revoke", func(w http.ResponseWriter, r *http.Request) {
-		s.send(w, func() (any, error) { return s.App.RevokeSession(bearer(r), body(r)) })
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
+		s.send(w, func() (any, error) { return s.App.RevokeSession(bearer(r), raw) })
 	})
 	mux.HandleFunc("POST /api/v1/auth/signout", func(w http.ResponseWriter, r *http.Request) {
 		s.App.SignOut(bearer(r))
@@ -163,7 +236,12 @@ func (s *Server) Handler() http.Handler {
 				s.ok(w, nil, err)
 				return
 			}
-			s.send(w, func() (any, error) { return next(id, body(r)) })
+			raw, err := body(r)
+			if err != nil {
+				s.ok(w, nil, err)
+				return
+			}
+			s.send(w, func() (any, error) { return next(id, raw) })
 		}
 	}
 	mux.HandleFunc("GET /api/v1/me", auth(func(id string, _ map[string]any) (any, error) { return s.App.Me(id) }))
@@ -194,7 +272,11 @@ func (s *Server) Handler() http.Handler {
 			s.ok(w, nil, err)
 			return
 		}
-		raw := body(r)
+		raw, err := body(r)
+		if err != nil {
+			s.ok(w, nil, err)
+			return
+		}
 		raw["origin"] = requestOrigin(r)
 		s.send(w, func() (any, error) { return s.App.CreateBooking(id, raw) })
 	})
@@ -207,6 +289,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/orders/list", auth(func(id string, raw map[string]any) (any, error) { return s.App.ListOrders(id, raw) }))
 	mux.HandleFunc("POST /api/v1/orders/status", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetOrderStatus(id, raw) }))
 	mux.HandleFunc("POST /api/v1/orders/when", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetOrderWhen(id, raw) }))
+	mux.HandleFunc("POST /api/v1/tables/list", auth(func(id string, raw map[string]any) (any, error) { return s.App.ListDiningTables(id, raw) }))
+	mux.HandleFunc("POST /api/v1/tables/save", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveDiningTable(id, raw) }))
+	mux.HandleFunc("POST /api/v1/tables/delete", auth(func(id string, raw map[string]any) (any, error) { return s.App.DeleteDiningTable(id, raw) }))
+	mux.HandleFunc("POST /api/v1/tables/reservations", auth(func(id string, raw map[string]any) (any, error) { return s.App.ListTableReservations(id, raw) }))
+	mux.HandleFunc("POST /api/v1/tables/release", auth(func(id string, raw map[string]any) (any, error) { return s.App.ReleaseTable(id, raw) }))
+	mux.HandleFunc("POST /api/v1/tables/cancel", auth(func(id string, raw map[string]any) (any, error) { return s.App.CancelTable(id, raw) }))
 	mux.HandleFunc("POST /api/v1/shop-hours/get", auth(func(id string, raw map[string]any) (any, error) { return s.App.ShopHours(id, raw) }))
 	mux.HandleFunc("POST /api/v1/shop-hours/save", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveShopHours(id, raw) }))
 	mux.HandleFunc("POST /api/v1/customers/file", auth(func(id string, raw map[string]any) (any, error) { return s.App.CustomerFile(id, raw) }))
@@ -223,14 +311,35 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/support/tickets", auth(func(id string, raw map[string]any) (any, error) { return s.App.CreateSupportTicket(id, raw) }))
 	mux.HandleFunc("POST /api/v1/support/tickets/reply", auth(func(id string, raw map[string]any) (any, error) { return s.App.ReplySupportTicket(id, raw) }))
 	mux.HandleFunc("POST /api/v1/support/tickets/close", auth(func(id string, raw map[string]any) (any, error) { return s.App.CloseSupportTicket(id, raw) }))
+	mux.HandleFunc("POST /api/v1/support/tickets/reopen", auth(func(id string, raw map[string]any) (any, error) { return s.App.ReopenSupportTicket(id, raw) }))
+	mux.HandleFunc("GET /api/v1/admin/support", auth(func(id string, _ map[string]any) (any, error) { return s.App.AdminSupportTickets(id) }))
+	mux.HandleFunc("POST /api/v1/admin/support/reply", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminReplySupportTicket(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/support/close", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminCloseSupportTicket(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/support/reopen", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminReopenSupportTicket(id, raw) }))
 	mux.HandleFunc("GET /api/v1/admin/overview", auth(func(id string, _ map[string]any) (any, error) { return s.App.AdminOverview(id) }))
 	mux.HandleFunc("POST /api/v1/admin/users", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminUsers(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/users/access", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetUserDisabled(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/users/admin", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetPlatformAdmin(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/search", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminSearch(id, raw) }))
 	mux.HandleFunc("POST /api/v1/admin/businesses", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminBusinesses(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/business", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminBusinessFile(id, raw) }))
 	mux.HandleFunc("POST /api/v1/admin/moderate", auth(func(id string, raw map[string]any) (any, error) { return s.App.Moderate(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/media/delete", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminDeleteMedia(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/sms", auth(func(id string, raw map[string]any) (any, error) { return s.App.GrantSMS(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/payments", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminPayments(id, raw) }))
 	mux.HandleFunc("GET /api/v1/admin/categories", auth(func(id string, _ map[string]any) (any, error) { return s.App.AdminCategories(id) }))
 	mux.HandleFunc("POST /api/v1/admin/categories", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveCategory(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/categories/move", auth(func(id string, raw map[string]any) (any, error) { return s.App.MoveCategory(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/categories/delete", auth(func(id string, raw map[string]any) (any, error) { return s.App.DeleteCategory(id, raw) }))
 	mux.HandleFunc("GET /api/v1/admin/audit", auth(func(id string, _ map[string]any) (any, error) { return s.App.AdminAudit(id) }))
+	mux.HandleFunc("POST /api/v1/admin/audit", auth(func(id string, raw map[string]any) (any, error) { return s.App.AdminAuditPage(id, raw) }))
 	mux.HandleFunc("POST /api/v1/admin/settings", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveSettings(id, raw) }))
+	mux.HandleFunc("GET /api/v1/payments/callback/{gateway}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, s.App.FinishPayment(r.PathValue("gateway"), r.URL.Query()), http.StatusFound)
+	})
+	mux.HandleFunc("POST /api/v1/payments/start", auth(func(id string, raw map[string]any) (any, error) { return s.App.StartPayment(id, raw) }))
+	mux.HandleFunc("POST /api/v1/sms/prefs", auth(func(id string, raw map[string]any) (any, error) { return s.App.SaveSMSPrefs(id, raw) }))
+	mux.HandleFunc("POST /api/v1/admin/gateways", auth(func(id string, raw map[string]any) (any, error) { return s.App.SetGateway(id, raw) }))
 	return mux
 }
 
@@ -264,17 +373,6 @@ func docExt(contentType, name string) string {
 	default:
 		return ""
 	}
-}
-
-func clientIP(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 func videoExt(contentType, name string) string {
@@ -317,26 +415,96 @@ func bearer(r *http.Request) string {
 	return ""
 }
 
-func body(r *http.Request) map[string]any {
+func body(r *http.Request) (map[string]any, error) {
 	if r.Body == nil {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
 	defer r.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(r.Body, (2<<20)+1))
+	if err != nil {
+		return nil, &statusErr{400, "VALIDATION", "درخواست خوانده نشد"}
+	}
+	if len(raw) > 2<<20 {
+		return nil, &statusErr{400, "VALIDATION", "درخواست خیلی بزرگ است"}
+	}
 	if len(raw) == 0 {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
-		return map[string]any{}
+		return nil, &statusErr{400, "VALIDATION", "درخواست نامعتبر است"}
 	}
-	return m
+	return m, nil
 }
 
-func withDevice(r *http.Request) map[string]any {
-	raw := body(r)
+func withDevice(r *http.Request) (map[string]any, error) {
+	raw, err := body(r)
+	if err != nil {
+		return nil, err
+	}
 	raw["device"] = app.DeviceLabel(r.UserAgent())
-	return raw
+	return raw, nil
+}
+
+type statusErr struct {
+	status int
+	code   string
+	msg    string
+}
+
+func (e *statusErr) Error() string { return e.msg }
+
+func (e *statusErr) Parts() (int, string, string) { return e.status, e.code, e.msg }
+
+func uploadErr(err error) error {
+	var max *http.MaxBytesError
+	if errors.As(err, &max) || strings.Contains(strings.ToLower(err.Error()), "too large") {
+		return app.MediaError("حجم فایل بیشتر از حد مجاز است")
+	}
+	return app.MediaError("فایل درست نرسید. دوباره انتخاب کنید")
+}
+
+func requestToken(r *http.Request) string {
+	if token := bearer(r); token != "" {
+		return token
+	}
+	c, err := r.Cookie("agent_token")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.Value)
+}
+
+func serveStored(w http.ResponseWriter, r *http.Request, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	head := make([]byte, 512)
+	n, _ := file.Read(head)
+	kind := app.ContentKind(head[:n])
+	if kind == "html" {
+		http.NotFound(w, r)
+		return
+	}
+	if _, err := file.Seek(0, 0); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", app.MediaType(kind))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !app.MediaPublic(filepath.Base(path)) {
+		name := app.AttachmentName(r.URL.Query().Get("name"))
+		w.Header().Set("Content-Disposition", "attachment; filename=\"download\"; filename*=UTF-8''"+url.PathEscape(name))
+	}
+	http.ServeContent(w, r, filepath.Base(path), info.ModTime(), file)
 }
 
 func (s *Server) send(w http.ResponseWriter, fn func() (any, error)) {
